@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS servers (
 	size TEXT,
 	agent_public_key TEXT,
 	tunnel_id TEXT,
+	tunnel_name TEXT,
+	tunnel_token TEXT,
 	status TEXT CHECK(status IN ('provisioning','active','offline','failed','destroyed')) DEFAULT 'provisioning',
 	created_at INTEGER DEFAULT (unixepoch()),
 	last_seen_at INTEGER
@@ -38,6 +40,8 @@ CREATE TABLE IF NOT EXISTS projects (
 	repo_url TEXT,
 	default_branch TEXT DEFAULT 'main',
 	default_port INTEGER DEFAULT 3000,
+	build_command TEXT,
+	serve_command TEXT,
 	created_at INTEGER DEFAULT (unixepoch()),
 	UNIQUE(user_id, slug)
 );
@@ -50,7 +54,9 @@ CREATE TABLE IF NOT EXISTS deployments (
 	commit_sha TEXT,
 	image_tag TEXT,
 	hostname TEXT,
+	public_url TEXT,
 	dns_record_id TEXT,
+	port INTEGER,
 	status TEXT CHECK(status IN ('queued','building','deploying','running','failed','cancelled')) DEFAULT 'queued',
 	build_log TEXT,
 	error TEXT,

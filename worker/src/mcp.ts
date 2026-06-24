@@ -2,8 +2,19 @@
  * void Worker — minimal MCP server
  *
  * Implements JSON-RPC 2.0 + MCP Streamable HTTP.
- * Tools: void_list_servers, void_create_server, void_deploy, void_get_logs.
+ * Tools: void_list_servers, void_create_server, void_deploy, void_get_logs,
+ *        void_ping_agent, void_teardown.
  */
+
+import { Env } from "./env";
+import {
+	createTunnel,
+	createDnsCname,
+	upsertIngressRule,
+	removeIngressRule,
+	findDnsRecord,
+	deleteDnsRecord,
+} from "./cf";
 
 interface JsonRpcRequest {
 	jsonrpc: "2.0";
@@ -43,7 +54,7 @@ const TOOLS = [
 	{
 		name: "void_deploy",
 		description:
-			"Trigger a deployment on a server. Sends a deploy command to the connected agent over WebSocket. The agent clones the repo, runs Railpack, starts the container, streams logs back.",
+			"Trigger a deployment on a server. Sends a deploy command to the connected agent over WebSocket. The agent clones the repo, runs the build, starts the serve, and (if cloudflared is installed + CF_API_TOKEN is set) makes the app publicly accessible via a wildcard tunnel + DNS record.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -51,11 +62,24 @@ const TOOLS = [
 				repo_url: { type: "string", description: "Git URL, e.g. 'https://github.com/owner/repo'" },
 				ref: { type: "string", description: "Branch / tag / commit SHA. Default: 'main'", default: "main" },
 				env: { type: "object", description: "Env vars as key-value", additionalProperties: { type: "string" } },
-				build_command: { type: "string", description: "Shell command to run after clone (e.g. 'cd examples/static-site && npm run build'). Default: skip build." },
-				serve_command: { type: "string", description: "Shell command to run in background after build (e.g. 'cd examples/static-site && npm start'). Default: no serve." },
+				build_command: { type: "string", description: "Shell command to run after clone. Default: skip." },
+				serve_command: { type: "string", description: "Shell command to run in background after build. Default: no serve." },
 				port: { type: "integer", description: "Local port the serve_command listens on. Default: 3000.", default: 3000 },
+				hostname: { type: "string", description: "Custom public hostname (without zone). Default: auto-generated from deployment_id." },
 			},
 			required: ["server_id", "repo_url"],
+		},
+	},
+	{
+		name: "void_teardown",
+		description:
+			"Tear down a deployment: removes the DNS record and the tunnel ingress rule for the hostname. Does NOT stop the running process on the agent (the agent handles that via the deployment lifecycle).",
+		inputSchema: {
+			type: "object",
+			properties: {
+				deployment_id: { type: "string", description: "Deployment to teardown" },
+			},
+			required: ["deployment_id"],
 		},
 	},
 	{
@@ -90,7 +114,7 @@ function rpcErr(id: JsonRpcRequest["id"], code: number, message: string, data?: 
 	return { jsonrpc: "2.0", id: id ?? null, error: { code, message, data } };
 }
 
-export async function handleMcp(request: Request, env: any): Promise<Response> {
+export async function handleMcp(request: Request, env: Env): Promise<Response> {
 	if (request.method !== "POST") {
 		return new Response("MCP requires POST", { status: 405 });
 	}
@@ -104,7 +128,6 @@ export async function handleMcp(request: Request, env: any): Promise<Response> {
 
 	const { id, method, params } = body;
 
-	// MCP initialize handshake
 	if (method === "initialize") {
 		return Response.json(
 			rpc(id, {
@@ -115,12 +138,10 @@ export async function handleMcp(request: Request, env: any): Promise<Response> {
 		);
 	}
 
-	// tools/list
 	if (method === "tools/list") {
 		return Response.json(rpc(id, { tools: TOOLS }));
 	}
 
-	// tools/call
 	if (method === "tools/call") {
 		const toolName = params?.name as string;
 		const args = (params?.arguments || {}) as Record<string, any>;
@@ -129,7 +150,7 @@ export async function handleMcp(request: Request, env: any): Promise<Response> {
 			switch (toolName) {
 				case "void_list_servers": {
 					const { results } = await env.void_db
-						.prepare("SELECT id, name, provider, status, region, last_seen_at FROM servers ORDER BY created_at DESC")
+						.prepare("SELECT id, name, provider, status, region, last_seen_at, tunnel_id IS NOT NULL AS has_tunnel FROM servers ORDER BY created_at DESC")
 						.all();
 					return Response.json(
 						rpc(id, {
@@ -141,7 +162,6 @@ export async function handleMcp(request: Request, env: any): Promise<Response> {
 				case "void_create_server": {
 					const id = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 					const now = Math.floor(Date.now() / 1000);
-					// For MVP, insert as 'provisioning'. Real impl would call Hetzner API + cloud-init.
 					await env.void_db
 						.prepare(
 							`INSERT INTO servers (id, name, provider, region, size, status, created_at)
@@ -179,25 +199,125 @@ export async function handleMcp(request: Request, env: any): Promise<Response> {
 
 					// Check server exists
 					const server = await env.void_db
-						.prepare("SELECT id, status FROM servers WHERE id = ?")
+						.prepare(
+							"SELECT id, status, tunnel_id, tunnel_token, tunnel_name FROM servers WHERE id = ?",
+						)
 						.bind(serverId)
-						.first();
+						.first<{
+							id: string;
+							status: string;
+							tunnel_id: string | null;
+							tunnel_token: string | null;
+							tunnel_name: string | null;
+						}>();
 					if (!server) {
 						return Response.json(
-							rpcErr(id, -32004, `Server ${serverId} not found. Use void_list_servers to see available servers.`)
+							rpcErr(
+								id,
+								-32004,
+								`Server ${serverId} not found. Use void_list_servers to see available servers.`,
+							)
 						);
 					}
 
-					// Insert deployment row
+					// Cloudflare tunnel + DNS setup (if configured)
+					let hostname: string | null = null;
+					let publicUrl: string | null = null;
+					let dnsRecordId: string | null = null;
+					let tunnelToken = server.tunnel_token;
+					let tunnelId = server.tunnel_id;
+
+					if (env.CF_API_TOKEN && env.CF_ACCOUNT_ID && env.CF_ZONE_ID) {
+						// 1. Create tunnel on first use
+						if (!tunnelId || !tunnelToken) {
+							try {
+								const tunnel = await createTunnel(
+									env.CF_API_TOKEN,
+									env.CF_ACCOUNT_ID,
+									`void-${serverId}`,
+								);
+								tunnelId = tunnel.id;
+								tunnelToken = tunnel.token;
+								await env.void_db
+									.prepare(
+										"UPDATE servers SET tunnel_id = ?, tunnel_name = ?, tunnel_token = ? WHERE id = ?",
+									)
+									.bind(tunnelId, tunnel.name, tunnelToken, serverId)
+									.run();
+							} catch (e: any) {
+								return Response.json(
+									rpcErr(
+										id,
+										-32005,
+										`Failed to create CF tunnel: ${e?.message || e}. Check CF_API_TOKEN / CF_ACCOUNT_ID.`,
+									)
+								);
+							}
+						}
+
+						// 2. Compute hostname
+						hostname = (args.hostname as string) || `pr-${deploymentId}`;
+						// 3. Upsert ingress
+						const port = (args.port as number) || 3000;
+						try {
+							await upsertIngressRule(
+								env.CF_API_TOKEN,
+								env.CF_ACCOUNT_ID,
+								tunnelId!,
+								hostname,
+								`http://localhost:${port}`,
+							);
+						} catch (e: any) {
+							return Response.json(
+								rpcErr(id, -32006, `Failed to update tunnel ingress: ${e?.message || e}`),
+							);
+						}
+
+						// 4. Create DNS record
+						try {
+							// Get zone name to build FQDN
+							const zoneResp = await fetch(
+								`https://api.cloudflare.com/client/v4/zones/${env.CF_ZONE_ID}`,
+								{ headers: { Authorization: `Bearer ${env.CF_API_TOKEN}` } },
+							);
+							const zoneBody: any = await zoneResp.json();
+							const zoneName: string = zoneBody.result?.name || "void.delivery";
+							const fqdn = `${hostname}.${zoneName}`;
+							const dns = await createDnsCname(
+								env.CF_API_TOKEN,
+								env.CF_ZONE_ID,
+								fqdn,
+								tunnelId!,
+							);
+							dnsRecordId = dns.id;
+							publicUrl = `https://${fqdn}`;
+						} catch (e: any) {
+							return Response.json(
+								rpcErr(id, -32007, `Failed to create DNS record: ${e?.message || e}`),
+							);
+						}
+					}
+
+					// 5. Insert deployment row
+					const now = Math.floor(Date.now() / 1000);
 					await env.void_db
 						.prepare(
-							`INSERT INTO deployments (id, server_id, ref, status, started_at)
-							 VALUES (?, ?, ?, 'queued', ?)`
+							`INSERT INTO deployments (id, server_id, ref, status, started_at, hostname, public_url, dns_record_id, port)
+							 VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
 						)
-						.bind(deploymentId, serverId, args.ref || "main", Math.floor(Date.now() / 1000))
+						.bind(
+							deploymentId,
+							serverId,
+							args.ref || "main",
+							now,
+							hostname,
+							publicUrl,
+							dnsRecordId,
+							(args.port as number) || 3000,
+						)
 						.run();
 
-					// Send deploy command to the agent via the void-cell DO
+					// 6. Send deploy command to the agent via the void-cell DO
 					const cellId = env.void_cell.idFromName(serverId);
 					const cellStub = env.void_cell.get(cellId);
 					const sendResp = await cellStub.fetch("https://cell/send-deploy", {
@@ -210,7 +330,11 @@ export async function handleMcp(request: Request, env: any): Promise<Response> {
 							env: args.env || {},
 							build_command: args.build_command || null,
 							serve_command: args.serve_command || null,
-							port: args.port || 3000,
+							port: (args.port as number) || 3000,
+							hostname,
+							public_url: publicUrl,
+							tunnel_token: tunnelToken,
+							tunnel_id: tunnelId,
 						}),
 					});
 
@@ -229,13 +353,89 @@ export async function handleMcp(request: Request, env: any): Promise<Response> {
 											ref: args.ref || "main",
 											build_command: args.build_command || "(skipped)",
 											serve_command: args.serve_command || "(skipped)",
-											port: args.port || 3000,
+											port: (args.port as number) || 3000,
+											hostname,
+											public_url: publicUrl,
+											dns_record_id: dnsRecordId,
+											tunnel_id: tunnelId,
 											dispatched_to_agent: sendResp.ok,
 											agent_response: sendResult,
-											note: "Watch logs via void_get_logs (SSE stream).",
+											note: publicUrl
+												? `Public URL: ${publicUrl} (requires cloudflared running on agent)`
+												: "No public URL — set CF_API_TOKEN/CF_ACCOUNT_ID/CF_ZONE_ID to enable tunneling",
 										},
 										null,
 										2
+									),
+								},
+							],
+						})
+					);
+				}
+
+				case "void_teardown": {
+					const deploymentId = args.deployment_id as string;
+					const dep = await env.void_db
+						.prepare(
+							"SELECT id, server_id, hostname, dns_record_id, public_url, port FROM deployments WHERE id = ?",
+						)
+						.bind(deploymentId)
+						.first<{
+							id: string;
+							server_id: string;
+							hostname: string | null;
+							dns_record_id: string | null;
+							public_url: string | null;
+							port: number;
+						}>();
+					if (!dep) {
+						return Response.json(rpcErr(id, -32004, `Deployment ${deploymentId} not found`));
+					}
+
+					if (env.CF_API_TOKEN && env.CF_ACCOUNT_ID) {
+						const server = await env.void_db
+							.prepare("SELECT tunnel_id FROM servers WHERE id = ?")
+							.bind(dep.server_id)
+							.first<{ tunnel_id: string | null }>();
+						if (server?.tunnel_id && dep.hostname) {
+							try {
+								await removeIngressRule(
+									env.CF_API_TOKEN,
+									env.CF_ACCOUNT_ID,
+									server.tunnel_id,
+									dep.hostname,
+								);
+							} catch (e: any) {
+								// log but don't fail
+							}
+						}
+						if (dep.dns_record_id && env.CF_ZONE_ID) {
+							try {
+								await deleteDnsRecord(
+									env.CF_API_TOKEN,
+									env.CF_ZONE_ID,
+									dep.dns_record_id,
+								);
+							} catch (e: any) {
+								// log but don't fail
+							}
+						}
+					}
+
+					await env.void_db
+						.prepare("UPDATE deployments SET status = 'cancelled' WHERE id = ?")
+						.bind(deploymentId)
+						.run();
+
+					return Response.json(
+						rpc(id, {
+							content: [
+								{
+									type: "text",
+									text: JSON.stringify(
+										{ deployment_id: deploymentId, status: "cancelled" },
+										null,
+										2,
 									),
 								},
 							],
@@ -252,7 +452,6 @@ export async function handleMcp(request: Request, env: any): Promise<Response> {
 					if (deploymentId) params.set("deployment_id", deploymentId);
 					const logResp = await cellStub.fetch(`https://cell/logs?${params.toString()}`);
 
-					// Return the SSE stream directly as the tool response (MCP supports stream)
 					return new Response(logResp.body, {
 						headers: {
 							"content-type": "text/event-stream",
@@ -282,7 +481,6 @@ export async function handleMcp(request: Request, env: any): Promise<Response> {
 		}
 	}
 
-	// ping
 	if (method === "ping") {
 		return Response.json(rpc(id, { pong: true, ts: Date.now() }));
 	}

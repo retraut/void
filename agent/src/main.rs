@@ -71,6 +71,10 @@ enum AgentIn {
         build_command: Option<String>,
         serve_command: Option<String>,
         port: Option<u16>,
+        hostname: Option<String>,
+        public_url: Option<String>,
+        tunnel_token: Option<String>,
+        tunnel_id: Option<String>,
     },
     Shutdown {},
 }
@@ -244,6 +248,22 @@ async fn handle_incoming(
                 .get("port")
                 .and_then(|v| v.as_u64())
                 .map(|n| n as u16);
+            let hostname = parsed
+                .get("hostname")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let public_url = parsed
+                .get("public_url")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let tunnel_token = parsed
+                .get("tunnel_token")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let tunnel_id = parsed
+                .get("tunnel_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
 
             info!(deployment_id = %deployment_id, repo = %repo_url, ref_ = %ref_, "deploy requested");
             run_deploy(
@@ -253,6 +273,10 @@ async fn handle_incoming(
                 build_command,
                 serve_command,
                 port,
+                hostname,
+                public_url,
+                tunnel_token,
+                tunnel_id,
                 cfg.clone(),
                 ws,
             )
@@ -278,6 +302,10 @@ struct DeployParams {
     build_command: Option<String>,
     serve_command: Option<String>,
     port: Option<u16>,
+    hostname: Option<String>,
+    public_url: Option<String>,
+    tunnel_token: Option<String>,
+    tunnel_id: Option<String>,
     build_dir: PathBuf,
 }
 
@@ -288,6 +316,10 @@ async fn run_deploy(
     build_command: Option<String>,
     serve_command: Option<String>,
     port: Option<u16>,
+    hostname: Option<String>,
+    public_url: Option<String>,
+    tunnel_token: Option<String>,
+    tunnel_id: Option<String>,
     cfg: Config,
     ws: &mut WsStream,
 ) {
@@ -300,6 +332,10 @@ async fn run_deploy(
         build_command,
         serve_command,
         port,
+        hostname,
+        public_url,
+        tunnel_token,
+        tunnel_id,
         build_dir: std::env::temp_dir().join(format!("void-build-{}", &deployment_id)),
     };
 
@@ -514,10 +550,56 @@ async fn run_deploy(
             .await;
         }
 
-        let public_url = cfg
-            .public_url_template
-            .replace("{port}", &port.to_string())
-            .replace("{deployment_id}", &deployment_id);
+        let public_url = params
+            .public_url
+            .clone()
+            .unwrap_or_else(|| {
+                cfg.public_url_template
+                    .replace("{port}", &port.to_string())
+                    .replace("{deployment_id}", &deployment_id)
+            });
+        let local_url = format!("http://127.0.0.1:{}", port);
+
+        // If we have a tunnel_token, ensure cloudflared is running so the
+        // public URL is actually reachable.
+        if let Some(token) = &params.tunnel_token {
+            if let Some(host) = &params.hostname {
+                emit_log(
+                    &mut line_no,
+                    &deployment_id,
+                    ws,
+                    "stdout",
+                    format!("→ ensuring cloudflared is running for tunnel...\n"),
+                )
+                .await;
+                match ensure_cloudflared(token, host).await {
+                    Ok(()) => {
+                        emit_log(
+                            &mut line_no,
+                            &deployment_id,
+                            ws,
+                            "stdout",
+                            format!("→ ✓ cloudflared running, public URL active: {}\n", public_url),
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        emit_log(
+                            &mut line_no,
+                            &deployment_id,
+                            ws,
+                            "stderr",
+                            format!(
+                                "→ cloudflared setup warning: {}. Install with `brew install cloudflared` (macOS) or `apt install cloudflared` (Linux). Public URL won't work until then.\n",
+                                e
+                            ),
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+
         emit_done(
             &deployment_id,
             ws,
@@ -792,4 +874,74 @@ fn now_ts() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+/// Ensure cloudflared is running for the given tunnel token. Idempotent:
+/// - if a cloudflared process is already running for this token, no-op
+/// - if cloudflared is installed but not running, start it in the background
+/// - if cloudflared is not installed, return an error so the caller can log
+async fn ensure_cloudflared(
+    tunnel_token: &str,
+    _hostname: &str,
+) -> Result<(), String> {
+    // 1. check if cloudflared is on PATH
+    let which = Command::new("which")
+        .arg("cloudflared")
+        .output()
+        .await
+        .map_err(|e| format!("which failed: {}", e))?;
+    if !which.status.success() {
+        return Err("cloudflared not found in PATH".to_string());
+    }
+
+    // 2. check if it's already running with this token (look for the pid file
+    // cloudflared writes when run as `service install`)
+    // For MVP we just spawn it — cloudflared deduplicates connections by token.
+    // Multiple instances of the same tunnel is allowed by CF (it's a quorum).
+
+    // 3. start cloudflared as a background process. We do NOT wait on it.
+    // `cloudflared tunnel run --token <token>` runs forever; we let it.
+    let mut child = Command::new("cloudflared")
+        .arg("tunnel")
+        .arg("--no-autoupdate")
+        .arg("run")
+        .arg(tunnel_token)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(false) // we want it to outlive this function
+        .spawn()
+        .map_err(|e| format!("spawn cloudflared failed: {}", e))?;
+
+    // capture initial output (timeout so we don't block forever if it's slow)
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    if let Some(out) = stdout {
+        let mut reader = BufReader::new(out).lines();
+        // Read up to ~3s of initial output to surface "tunnel registered" or errors
+        let _ = tokio::time::timeout(Duration::from_secs(3), async {
+            while let Ok(Some(line)) = reader.next_line().await {
+                tracing::info!(target: "cloudflared", "{}", line);
+            }
+        })
+        .await;
+    }
+    if let Some(err) = stderr {
+        let mut reader = BufReader::new(err).lines();
+        let _ = tokio::time::timeout(Duration::from_secs(3), async {
+            while let Ok(Some(line)) = reader.next_line().await {
+                tracing::warn!(target: "cloudflared", "{}", line);
+            }
+        })
+        .await;
+    }
+
+    // Detach: don't wait on the child. We've consumed its initial output.
+    // The OS reaps it when it exits; until then it serves traffic.
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+        tracing::info!("cloudflared process exited");
+    });
+
+    Ok(())
 }

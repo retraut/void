@@ -33,6 +33,11 @@ interface WorkerToAgent {
 	build_command?: string;
 	serve_command?: string;
 	port?: number;
+	// Tunnel/cloudflared info (so the agent can run cloudflared locally)
+	hostname?: string;
+	public_url?: string;
+	tunnel_token?: string;
+	tunnel_id?: string;
 }
 
 export class VoidCell {
@@ -82,6 +87,10 @@ export class VoidCell {
 				build_command: body.build_command,
 				serve_command: body.serve_command,
 				port: body.port,
+				hostname: body.hostname,
+				public_url: body.public_url,
+				tunnel_token: body.tunnel_token,
+				tunnel_id: body.tunnel_id,
 			};
 			this.ws.send(JSON.stringify(msg));
 			return Response.json({ ok: true, sent: msg });
