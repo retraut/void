@@ -1,0 +1,46 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "void",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-06-24",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"global_fetch_strictly_public"
+	],
+	"assets": {
+		"directory": "./public"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+
+	// D1 — primary state (users, servers, projects, deployments)
+	"d1_databases": [
+		{
+			"binding": "void_db",
+			"database_name": "void-db",
+			"database_id": "cc139431-0ef9-4e39-9b82-fa4ad8912921"
+		}
+	],
+
+	// KV — route cache, per-user rate limits, session flags
+	"kv_namespaces": [
+		{
+			"binding": "ROUTES",
+			"id": "3d68b2f3d7c64495bd47c15683ea5e4f"
+		}
+	],
+
+	// R2 — build cache, mirrored images, log archive
+	"r2_buckets": [
+		{
+			"binding": "void_builds",
+			"bucket_name": "void-builds"
+		}
+	]
+}
