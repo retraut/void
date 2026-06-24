@@ -1,0 +1,24 @@
+{
+  "name": "void",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vercel DX. Hetzner bill. No SSH. Self-hosted edge-driven PaaS with MCP-native AI deploys.",
+  "license": "MIT",
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:worker": "pnpm --filter @void/worker dev",
+    "dev:ui": "pnpm --filter @void/ui dev",
+    "build:worker": "pnpm --filter @void/worker build",
+    "build:agent": "pnpm --filter @void/agent build",
+    "deploy:worker": "pnpm --filter @void/worker deploy",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}
