@@ -26,6 +26,11 @@ pub struct Config {
     /// Optional: command to run on deploy instead of the default echo/test.
     /// For MVP we just run a synthetic build to verify the protocol.
     pub test_command: Option<String>,
+
+    /// Template for the public URL of a deployed app.
+    /// Use {port} as placeholder for the local port.
+    /// Example: "https://pr-{port}.void.example.com" or "https://{port}.loca.lt"
+    pub public_url_template: String,
 }
 
 impl Config {
@@ -49,6 +54,8 @@ impl Config {
             .unwrap_or_else(|_| "dev-setup-token".to_string());
         let name = std::env::var("VOID_SERVER_NAME").ok();
         let test_command = std::env::var("VOID_TEST_COMMAND").ok();
+        let public_url_template = std::env::var("VOID_PUBLIC_URL_TEMPLATE")
+            .unwrap_or_else(|_| "https://pr-{port}.void.example.com".to_string());
 
         Ok(Config {
             api_base,
@@ -57,6 +64,7 @@ impl Config {
             state_dir: None,
             name,
             test_command,
+            public_url_template,
         })
     }
 

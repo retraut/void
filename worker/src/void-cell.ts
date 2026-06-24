@@ -30,6 +30,9 @@ interface WorkerToAgent {
 	repo_url?: string;
 	ref?: string;
 	env?: Record<string, string>;
+	build_command?: string;
+	serve_command?: string;
+	port?: number;
 }
 
 export class VoidCell {
@@ -76,6 +79,9 @@ export class VoidCell {
 				repo_url: body.repo_url,
 				ref: body.ref,
 				env: body.env,
+				build_command: body.build_command,
+				serve_command: body.serve_command,
+				port: body.port,
 			};
 			this.ws.send(JSON.stringify(msg));
 			return Response.json({ ok: true, sent: msg });

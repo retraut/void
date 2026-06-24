@@ -1,0 +1,9 @@
+{
+  "name": "void-example-static",
+  "version": "0.1.0",
+  "description": "Static-site example for void — no build step, just serve",
+  "scripts": {
+    "build": "mkdir -p dist && cp index.html dist/index.html",
+    "start": "python3 -m http.server 3000 --directory dist"
+  }
+}

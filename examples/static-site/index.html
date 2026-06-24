@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>void — example app</title>
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+			background: #000; color: #fff;
+			min-height: 100vh;
+			display: flex; align-items: center; justify-content: center;
+			padding: 20px;
+		}
+		.container { max-width: 720px; text-align: center; }
+		h1 { font-size: 4rem; font-weight: 800; letter-spacing: -0.04em; margin-bottom: 24px; }
+		h1 span { background: linear-gradient(120deg, #fff 0%, #888 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+		p { font-size: 1.1rem; color: #999; line-height: 1.6; margin-bottom: 32px; }
+		.meta { display: inline-block; padding: 12px 24px; background: #111; border: 1px solid #333; border-radius: 8px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.85rem; color: #0f0; }
+		.deploy-id { color: #0f0; font-weight: 700; }
+		.built-at { color: #888; }
+		.brand { color: #666; font-size: 0.9rem; margin-top: 48px; }
+		.brand code { background: #111; padding: 2px 6px; border-radius: 4px; color: #fff; }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h1>deployed <span>into the void</span></h1>
+		<p>
+			This is a static site served by the void-agent after a real <code>git clone</code> →
+			build → serve pipeline. No Docker, no Railpack, no CI — just your AI calling
+			<code>void_deploy</code> and the agent running the build commands.
+		</p>
+		<div class="meta">
+			deployment: <span class="deploy-id" id="deployment-id">unknown</span><br>
+			commit: <span class="built-at" id="commit">unknown</span><br>
+			repo: <span class="built-at" id="repo">unknown</span><br>
+			built at: <span class="built-at" id="built-at">unknown</span>
+		</div>
+		<p class="brand">
+			Powered by <code>void</code> · Vercel DX, Hetzner bill, No SSH
+		</p>
+	</div>
+	<script>
+		const params = new URLSearchParams(window.location.search);
+		document.getElementById('deployment-id').textContent = params.get('deployment_id') || 'unknown';
+		document.getElementById('commit').textContent = (params.get('commit') || 'unknown').slice(0, 7);
+		document.getElementById('repo').textContent = params.get('repo') || 'unknown';
+		document.getElementById('built-at').textContent = new Date().toISOString();
+	</script>
+</body>
+</html>
