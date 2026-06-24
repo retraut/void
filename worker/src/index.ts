@@ -1,24 +1,13 @@
 /**
- * void — control plane Worker
- *
- * Edge-driven, MCP-native, self-hosted PaaS.
- * See docs/SPEC.md for the full technical specification.
+ * void Worker — main entry
  */
 
-export interface Env {
-	void_db: D1Database;
-	ROUTES: KVNamespace;
-	void_builds: R2Bucket;
-	COOKIE_SECRET?: string;
-	GITHUB_CLIENT_ID?: string;
-	GITHUB_CLIENT_SECRET?: string;
-	CF_API_TOKEN?: string;
-	CF_ACCOUNT_ID?: string;
-	CF_ZONE_ID?: string;
-	GITHUB_APP_ID?: string;
-	GITHUB_APP_PRIVATE_KEY?: string;
-	GITHUB_WEBHOOK_SECRET?: string;
-}
+import { Env } from "./env";
+import { ensureSchema } from "./db";
+import { VoidCell } from "./void-cell";
+import { handleMcp } from "./mcp";
+
+export { VoidCell };
 
 function json(data: unknown, status = 200): Response {
 	return new Response(JSON.stringify(data, null, 2), {
@@ -29,10 +18,56 @@ function json(data: unknown, status = 200): Response {
 
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+		// Run schema migrations (idempotent, no-op after first run)
+		ctx.waitUntil(ensureSchema(env.void_db));
+
 		const url = new URL(request.url);
 		const path = url.pathname;
 
-		// Health check / landing
+		// CORS preflight (for browser-based MCP clients)
+		if (request.method === "OPTIONS") {
+			return new Response(null, {
+				status: 204,
+				headers: {
+					"access-control-allow-origin": "*",
+					"access-control-allow-methods": "GET, POST, OPTIONS",
+					"access-control-allow-headers": "content-type, authorization, x-void-sig",
+					"access-control-max-age": "86400",
+				},
+			});
+		}
+
+		const corsHeaders = {
+			"access-control-allow-origin": "*",
+		};
+
+		// Cell routes: WS upgrade OR HTTP /cell/:id/{logs,status,send-deploy}
+		if (path.startsWith("/cell/")) {
+			const parts = path.slice("/cell/".length).split("/");
+			const serverId = parts[0];
+			if (!serverId) {
+				return new Response("Missing server_id", { status: 400 });
+			}
+			const cellId = env.void_cell.idFromName(serverId);
+			const cellStub = env.void_cell.get(cellId);
+			// Rewrite path to internal cell namespace so the DO can route it
+			const subPath = "/" + parts.slice(1).join("/") + url.search;
+			const internalUrl = new URL("https://cell" + subPath);
+			const newRequest = new Request(internalUrl.toString(), request);
+			return cellStub.fetch(newRequest);
+		}
+
+		// MCP endpoint
+		if (path === "/mcp") {
+			const resp = await handleMcp(request, env);
+			// add CORS headers
+			for (const [k, v] of Object.entries(corsHeaders)) {
+				resp.headers.set(k, v);
+			}
+			return resp;
+		}
+
+		// Health
 		if (path === "/" || path === "/health") {
 			return json({
 				name: "void",
@@ -44,35 +79,42 @@ export default {
 					d1: !!env.void_db,
 					kv: !!env.ROUTES,
 					r2: !!env.void_builds,
+					do: !!env.void_cell,
 				},
 			});
 		}
 
-		// API root
+		// API
 		if (path === "/api") {
 			return json({
 				endpoints: [
-					"GET /",
-					"GET /health",
-					"POST /mcp (MCP Streamable HTTP — coming in v0.1)",
-					"POST /api/webhooks/github (GitHub webhook — coming in v0.1)",
+					"GET /, /health",
+					"POST /mcp (MCP Streamable HTTP)",
+					"WS /cell/:server_id (agent)",
+					"GET /api/servers",
+					"POST /api/servers (create stub)",
+					"GET /api/cell/:server_id/status",
 				],
 			});
 		}
 
-		// MCP endpoint placeholder
-		if (path === "/mcp" && request.method === "POST") {
-			return json(
-				{
-					jsonrpc: "2.0",
-					error: { code: -32601, message: "MCP not yet implemented (v0.1 in progress)" },
-					id: null,
-				},
-				501
-			);
+		// Direct REST wrappers around MCP tools (for curl / scripts)
+		if (path === "/api/servers" && request.method === "GET") {
+			const { results } = await env.void_db
+				.prepare("SELECT id, name, provider, status, region, size, last_seen_at FROM servers ORDER BY created_at DESC")
+				.all();
+			return json({ servers: results });
 		}
 
-		// 404
+		if (path === "/api/cell/:server_id/status" || path.startsWith("/api/cell/")) {
+			const m = path.match(/^\/api\/cell\/([^/]+)\/status$/);
+			if (m) {
+				const cellId = env.void_cell.idFromName(m[1]);
+				const cellStub = env.void_cell.get(cellId);
+				return cellStub.fetch("https://cell/status");
+			}
+		}
+
 		return json({ error: "Not found", path }, 404);
 	},
 } satisfies ExportedHandler<Env>;

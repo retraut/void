@@ -19,7 +19,6 @@
 	},
 	"upload_source_maps": true,
 
-	// D1 — primary state (users, servers, projects, deployments)
 	"d1_databases": [
 		{
 			"binding": "void_db",
@@ -28,7 +27,6 @@
 		}
 	],
 
-	// KV — route cache, per-user rate limits, session flags
 	"kv_namespaces": [
 		{
 			"binding": "ROUTES",
@@ -36,11 +34,26 @@
 		}
 	],
 
-	// R2 — build cache, mirrored images, log archive
 	"r2_buckets": [
 		{
 			"binding": "void_builds",
 			"bucket_name": "void-builds"
+		}
+	],
+
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "void_cell",
+				"class_name": "VoidCell"
+			}
+		]
+	},
+
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["VoidCell"]
 		}
 	]
 }
