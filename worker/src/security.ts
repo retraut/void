@@ -75,24 +75,24 @@ export function validateRepoUrl(url: string): { ok: true; normalized: string } |
 
 /**
  * Validate shell command (build_command / serve_command).
- * Length cap + allowlist of safe shell characters.
- * Rejects: backticks (command substitution), $(), newlines, backslashes, redirection operators > < |,
- *           semicolons, ampersands (chaining — force && via dedicated wrapping if needed).
- *
- * This is a defense-in-depth check. The build/serve command runs as `sh -c CMD`,
- * so the allowlist must be conservative.
+ * STRICT allowlist — only safe characters. NO shell metachars at all.
+ * The build/serve command runs as `sh -c CMD`, so even seemingly safe
+ * chars like `;` and `&` are dangerous (command chaining).
  */
-const ALLOWED_SHELL_CHARS = /^[a-zA-Z0-9\s\-_/.:=+,'"*?~!@#%^&;|(){}[\]$]+$/;
+const ALLOWED_SHELL_CHARS = /^[a-zA-Z0-9\s\-_/.:=+,'"*?~!@#%^(),{}\[\]]+$/;
 const FORBIDDEN_PATTERNS = [
-	/\$\(/,        // command substitution $(...)
-	/`, `/,         // backticks for command substitution
-	/\\\\/,        // backslash (escape)
-	/\n/,          // newline
-	/\r/,          // carriage return
-	/>\s*&\d/,    // redirect to file descriptor
-	/>\s*\/dev\//, // write to device
+	/;/,            // command chaining
+	/\|/,           // pipe
+	/&/,            // background / and / &&
+	/\$/,           // variable / command substitution $()
+	/\\/,          // backslash (escape)
+	/\n/,           // newline
+	/\r/,           // carriage return
+	/[<>]/,        // redirect operators
 	/\|\s*sh/,     // pipe to sh
 	/\|\s*bash/,   // pipe to bash
+	/&&\s*rm/,     // force rm chain
+	/;\s*rm/,      // force rm chain
 ];
 
 export function validateShellCommand(
@@ -105,7 +105,7 @@ export function validateShellCommand(
 	if (!ALLOWED_SHELL_CHARS.test(cmd)) {
 		return {
 			ok: false,
-			reason: `${field} contains forbidden characters. Allowed: alphanum, spaces, shell punctuation`,
+			reason: `${field} contains forbidden characters. Allowed: alphanum, spaces, ., /, -, _, :, =, +, ', \", *, ?, ~, !, @, #, %, ^, (, ), {, }, [, ]`,
 		};
 	}
 	for (const pat of FORBIDDEN_PATTERNS) {

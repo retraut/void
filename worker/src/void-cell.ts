@@ -5,13 +5,15 @@
  * to SSE subscribers, serializes tunnel-config writes via blockConcurrencyWhile.
  *
  * Security:
- * - /cell/* routes require Bearer auth (except WS upgrade which validates setup_token)
+ * - /cell/* routes require Bearer auth (except WS upgrade which validates setup_token or session_token)
  * - Deploy messages are HMAC-signed with AGENT_SHARED_SECRET (signed by Worker,
  *   verified by agent before executing commands)
- * - setup_token is one-time: validated against D1, then marked consumed
+ * - setup_token is one-time: validated against D1 on first register, then replaced with persistent session_token
+ * - session_token is persistent for reconnects (rotated manually or on logout)
  */
 
 import { Env } from "./env";
+import { timingSafeEqual } from "./auth";
 
 interface AgentMessage {
 	type: "register" | "heartbeat" | "log" | "deploy_done" | "exec_result" | "ready";
@@ -19,6 +21,7 @@ interface AgentMessage {
 	server_id?: string;
 	public_key?: string;
 	setup_token?: string;
+	session_token?: string;
 	stream?: "stdout" | "stderr";
 	data?: string;
 	line?: number;
@@ -116,13 +119,13 @@ export class VoidCell {
 				tunnel_token: body.tunnel_token,
 				tunnel_id: body.tunnel_id,
 			};
-			if (env.AGENT_SHARED_SECRET) {
+			if (this.env.AGENT_SHARED_SECRET) {
 				const { signWithAgentSecret } = await import("./security");
 				const payload = JSON.stringify(deployMsg);
-				deployMsg.sig = await signWithAgentSecret(env.AGENT_SHARED_SECRET, payload);
+				(deployMsg as any).sig = await signWithAgentSecret(this.env.AGENT_SHARED_SECRET, payload);
 			}
 			this.ws.send(JSON.stringify(deployMsg));
-			return Response.json({ ok: true, sent: deployMsg, signed: !!deployMsg.sig });
+			return Response.json({ ok: true, sent: deployMsg, signed: !!(deployMsg as any).sig });
 		}
 
 		// Internal: subscribe to log stream (SSE)
@@ -170,9 +173,9 @@ export class VoidCell {
 		}
 
 		if (msg.type === "register") {
-			// Validate setup_token against D1 (one-time use)
 			const serverId = msg.server_id;
-			const token = msg.setup_token;
+			const setupToken = msg.setup_token;
+			const sessionToken = msg.session_token;
 			if (!serverId) {
 				this.ws?.send(JSON.stringify({ type: "error", code: "missing_server_id" }));
 				try { this.ws?.close(1008, "missing server_id"); } catch {}
@@ -182,10 +185,14 @@ export class VoidCell {
 
 			const row = await this.env.void_db
 				.prepare(
-					"SELECT setup_token, setup_token_consumed_at FROM servers WHERE id = ?",
+					"SELECT setup_token, setup_token_consumed_at, session_token FROM servers WHERE id = ?",
 				)
 				.bind(serverId)
-				.first<{ setup_token: string | null; setup_token_consumed_at: number | null }>();
+				.first<{
+					setup_token: string | null;
+					setup_token_consumed_at: number | null;
+					session_token: string | null;
+				}>();
 
 			if (!row) {
 				this.ws?.send(JSON.stringify({ type: "error", code: "unknown_server" }));
@@ -193,33 +200,64 @@ export class VoidCell {
 				this.ws = null;
 				return;
 			}
-			if (row.setup_token_consumed_at) {
-				this.ws?.send(JSON.stringify({ type: "error", code: "token_already_used" }));
-				try { this.ws?.close(1008, "setup_token already used"); } catch {}
-				this.ws = null;
-				return;
-			}
-			if (!row.setup_token || row.setup_token !== token) {
-				this.ws?.send(JSON.stringify({ type: "error", code: "invalid_token" }));
-				try { this.ws?.close(1008, "invalid setup_token"); } catch {}
-				this.ws = null;
-				return;
-			}
 
-			// Token is valid — consume it (one-time use) and store public key
+			// First-time register: validate one-time setup_token, issue persistent session_token
+			// Reconnect: validate persistent session_token
+			let authenticated = false;
+			let isFirstRegister = false;
 			const now = Math.floor(Date.now() / 1000);
-			await this.env.void_db
-				.prepare(
-					"UPDATE servers SET setup_token = NULL, setup_token_consumed_at = ?, agent_public_key = ? WHERE id = ?",
-				)
-				.bind(now, msg.public_key || null, serverId)
-				.run();
 
-			this.registered = true;
-			this.serverId = serverId;
-			this.agentPublicKey = msg.public_key || null;
-			this.lastHeartbeat = Date.now();
-			this.ws?.send(JSON.stringify({ type: "registered" }));
+			if (row.session_token && sessionToken && timingSafeEqual(row.session_token, sessionToken)) {
+				// Reconnect via session_token
+				authenticated = true;
+			} else if (row.setup_token && setupToken && timingSafeEqual(row.setup_token, setupToken)) {
+				// First-time register via setup_token
+				authenticated = true;
+				isFirstRegister = true;
+			}
+
+			if (!authenticated) {
+				this.ws?.send(JSON.stringify({ type: "error", code: "invalid_token" }));
+				try { this.ws?.close(1008, "invalid setup_token or session_token"); } catch {}
+				this.ws = null;
+				return;
+			}
+
+			if (isFirstRegister) {
+				// Generate persistent session_token for future reconnects
+				const newSessionToken = `sess_${crypto.randomUUID().replace(/-/g, "")}`;
+				await this.env.void_db
+					.prepare(
+						`UPDATE servers SET setup_token = NULL, setup_token_consumed_at = ?,
+						                  session_token = ?, session_token_created_at = ?,
+						                  agent_public_key = ? WHERE id = ?`,
+					)
+					.bind(now, newSessionToken, now, msg.public_key || null, serverId)
+					.run();
+				this.registered = true;
+				this.serverId = serverId;
+				this.agentPublicKey = msg.public_key || null;
+				this.lastHeartbeat = Date.now();
+				this.ws?.send(
+					JSON.stringify({
+						type: "registered",
+						session_token: newSessionToken,
+					}),
+				);
+			} else {
+				// Reconnect: just update public_key if changed, keep session_token
+				await this.env.void_db
+					.prepare(
+						"UPDATE servers SET agent_public_key = COALESCE(?, agent_public_key), last_seen_at = ? WHERE id = ?",
+					)
+					.bind(msg.public_key || null, now, serverId)
+					.run();
+				this.registered = true;
+				this.serverId = serverId;
+				this.agentPublicKey = msg.public_key || null;
+				this.lastHeartbeat = Date.now();
+				this.ws?.send(JSON.stringify({ type: "registered" }));
+			}
 			return;
 		}
 

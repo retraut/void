@@ -1,7 +1,10 @@
 /**
  * void Worker — symmetric encryption for D1 secrets
  *
- * Uses AES-256-GCM with a key derived from COOKIE_SECRET (or any 32+ byte secret).
+ * Uses AES-256-GCM with a 32-byte key derived from the provided secret.
+ * If the secret is < 32 bytes or > 32 bytes, it's hashed with SHA-256 to
+ * produce a 32-byte key. If it is exactly 32 bytes, it is used as-is.
+ *
  * Format: "v1.<base64-iv>.<base64-ciphertext>.<base64-tag>"
  */
 
@@ -9,11 +12,30 @@ const ALGO = "AES-GCM";
 const IV_BYTES = 12; // GCM standard
 
 async function importKey(secret: string): Promise<CryptoKey> {
-	// Pad/shorten to 32 bytes
 	const raw = new TextEncoder().encode(secret);
-	const key = new Uint8Array(32);
-	for (let i = 0; i < 32; i++) key[i] = raw[i % raw.length];
+	let key: Uint8Array;
+	if (raw.length === 32) {
+		key = raw;
+	} else {
+		// Derive a 32-byte key from any-length secret via SHA-256
+		const hash = await crypto.subtle.digest("SHA-256", raw);
+		key = new Uint8Array(hash);
+	}
 	return crypto.subtle.importKey("raw", key, ALGO, false, ["encrypt", "decrypt"]);
+}
+
+/**
+ * Returns the key to use for encryption: ENCRYPTION_KEY (preferred, dedicated secret)
+ * or COOKIE_SECRET (backward-compatible fallback). Throws if neither is configured.
+ */
+export function getEncryptionKey(env: { ENCRYPTION_KEY?: string; COOKIE_SECRET?: string }): string {
+	const key = env.ENCRYPTION_KEY || env.COOKIE_SECRET;
+	if (!key) {
+		throw new Error(
+			"ENCRYPTION_KEY (or legacy COOKIE_SECRET) is not configured — set it via `wrangler secret put ENCRYPTION_KEY`",
+		);
+	}
+	return key;
 }
 
 export async function encrypt(secret: string, plaintext: string): Promise<string> {

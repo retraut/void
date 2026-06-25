@@ -386,8 +386,9 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 								tunnelId = tunnel.id;
 								tunnelToken = tunnel.token;
 								// Encrypt tunnel_token before storing in D1
-								const encrypted = env.COOKIE_SECRET
-									? await encrypt(env.COOKIE_SECRET, tunnel.token)
+								const encryptKey = env.ENCRYPTION_KEY || env.COOKIE_SECRET;
+								const encrypted = encryptKey
+									? await encrypt(encryptKey, tunnel.token)
 									: null;
 								await env.void_db
 									.prepare(
@@ -406,8 +407,8 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 							}
 						} else {
 							// Tunnel exists — decrypt stored token
-							if (server.tunnel_token_encrypted && env.COOKIE_SECRET) {
-								tunnelToken = await decrypt(env.COOKIE_SECRET, server.tunnel_token_encrypted);
+							if (server.tunnel_token_encrypted && (env.ENCRYPTION_KEY || env.COOKIE_SECRET)) {
+								tunnelToken = await decrypt(env.ENCRYPTION_KEY || env.COOKIE_SECRET!, server.tunnel_token_encrypted);
 							}
 						}
 

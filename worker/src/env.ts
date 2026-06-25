@@ -9,7 +9,8 @@ export interface Env {
 	void_builds: R2Bucket;
 
 	// Secrets (set via wrangler secret put or via wizard)
-	COOKIE_SECRET?: string;
+	COOKIE_SECRET?: string; // session cookie HMAC key
+	ENCRYPTION_KEY?: string; // 32-byte secret for AES-256-GCM of tunnel tokens
 	VOID_BEARER_TOKEN?: string; // required on /api/* and /mcp
 	GITHUB_CLIENT_ID?: string;
 	GITHUB_CLIENT_SECRET?: string;

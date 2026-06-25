@@ -33,7 +33,10 @@ enum AgentOut {
     Register {
         server_id: String,
         public_key: String,
-        setup_token: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        setup_token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_token: Option<String>,
     },
     Heartbeat {
         timestamp: u64,
@@ -146,10 +149,29 @@ async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> Result<()> {
 
     info!("connected, sending register");
 
-    let register = AgentOut::Register {
-        server_id: cfg.server_id.clone(),
-        public_key: identity.public_key_b64(),
-        setup_token: cfg.setup_token.clone(),
+    // Load session_token from disk (if we have one from a previous successful register)
+    let session_token_file = cfg.state_dir().join("session_token");
+    let session_token = std::fs::read_to_string(&session_token_file)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let register = if let Some(token) = &session_token {
+        info!("reconnecting with session_token");
+        AgentOut::Register {
+            server_id: cfg.server_id.clone(),
+            public_key: identity.public_key_b64(),
+            setup_token: None,
+            session_token: Some(token.clone()),
+        }
+    } else {
+        info!("first-time register with setup_token");
+        AgentOut::Register {
+            server_id: cfg.server_id.clone(),
+            public_key: identity.public_key_b64(),
+            setup_token: Some(cfg.setup_token.clone()),
+            session_token: None,
+        }
     };
     ws.send(Message::Text(serde_json::to_string(&register)?))
         .await
@@ -215,6 +237,13 @@ async fn handle_incoming(
     match msg_type {
         "registered" => {
             info!("✓ registered with control plane");
+            // If server returned a new session_token, persist it
+            if let Some(token) = parsed.get("session_token").and_then(|v| v.as_str()) {
+                let token_path = cfg.state_dir().join("session_token");
+                let _ = std::fs::create_dir_all(cfg.state_dir());
+                let _ = std::fs::write(token_path, token);
+                info!("session_token saved to disk");
+            }
         }
         "ping" => {
             let ready = AgentOut::Ready { timestamp: now_ts() };
@@ -950,11 +979,13 @@ async fn ensure_cloudflared(
     }
 
     // 3. start cloudflared as a background process
+    // SECURITY: pass the token via TUNNEL_TOKEN env var, NOT as a CLI arg,
+    // so it doesn't appear in `ps aux` output.
     let mut child = Command::new("cloudflared")
         .arg("tunnel")
         .arg("--no-autoupdate")
         .arg("run")
-        .arg(tunnel_token)
+        .env("TUNNEL_TOKEN", tunnel_token)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(false)

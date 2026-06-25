@@ -104,8 +104,9 @@ const { encrypt } = await import("./crypto");
 				const tunnel = await createTunnel(env.CF_API_TOKEN, env.CF_ACCOUNT_ID, `void-${server.id}`);
 				tunnelId = tunnel.id;
 				tunnelToken = tunnel.token;
-				const encrypted = env.COOKIE_SECRET
-					? await encrypt(env.COOKIE_SECRET, tunnel.token)
+				const encryptKey = env.ENCRYPTION_KEY || env.COOKIE_SECRET;
+				const encrypted = encryptKey
+					? await encrypt(encryptKey, tunnel.token)
 					: null;
 				await env.void_db
 					.prepare("UPDATE servers SET tunnel_id = ?, tunnel_name = ?, tunnel_token_encrypted = ? WHERE id = ?")
@@ -117,8 +118,8 @@ const { encrypt } = await import("./crypto");
 		} else {
 			tunnelId = server.tunnel_id;
 			// Decrypt stored token
-			if (server.tunnel_token_encrypted && env.COOKIE_SECRET) {
-				tunnelToken = await decrypt(env.COOKIE_SECRET, server.tunnel_token_encrypted);
+			if (server.tunnel_token_encrypted && (env.ENCRYPTION_KEY || env.COOKIE_SECRET)) {
+				tunnelToken = await decrypt(env.ENCRYPTION_KEY || env.COOKIE_SECRET!, server.tunnel_token_encrypted);
 			}
 		}
 
