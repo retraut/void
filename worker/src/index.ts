@@ -14,6 +14,7 @@ import {
 	handleAuthMe,
 	handleAuthLogout,
 	renderLandingHtml,
+	requireBearer,
 } from "./auth";
 
 export { VoidCell };
@@ -35,25 +36,31 @@ export default {
 		const url = new URL(request.url);
 		const path = url.pathname;
 
-		// CORS preflight (for browser-based MCP clients)
-		if (request.method === "OPTIONS") {
+		// CORS preflight: ONLY for /mcp (real cross-origin) and /health (public).
+		// Other routes have NO CORS — they require same-origin or auth header.
+		if (request.method === "OPTIONS" && (path === "/mcp" || path === "/health")) {
 			return new Response(null, {
 				status: 204,
 				headers: {
 					"access-control-allow-origin": "*",
 					"access-control-allow-methods": "GET, POST, OPTIONS",
-					"access-control-allow-headers": "content-type, authorization, x-void-sig",
+					"access-control-allow-headers": "content-type, authorization",
 					"access-control-max-age": "86400",
 				},
 			});
 		}
 
-		const corsHeaders = {
-			"access-control-allow-origin": "*",
-		};
-
 		// Cell routes: WS upgrade OR HTTP /cell/:id/{logs,status,send-deploy}
 		if (path.startsWith("/cell/")) {
+			const isWsUpgrade = request.headers.get("Upgrade") === "websocket";
+
+			// WS upgrade: agent authenticates with setup_token in register frame (no bearer)
+			// HTTP: require Bearer auth (called by MCP tools, browser SSE)
+			if (!isWsUpgrade) {
+				const authFail = requireBearer(env, request);
+				if (authFail) return authFail;
+			}
+
 			const parts = path.slice("/cell/".length).split("/");
 			const serverId = parts[0];
 			if (!serverId) {
@@ -61,20 +68,22 @@ export default {
 			}
 			const cellId = env.void_cell.idFromName(serverId);
 			const cellStub = env.void_cell.get(cellId);
-			// Rewrite path to internal cell namespace so the DO can route it
 			const subPath = "/" + parts.slice(1).join("/") + url.search;
 			const internalUrl = new URL("https://cell" + subPath);
 			const newRequest = new Request(internalUrl.toString(), request);
 			return cellStub.fetch(newRequest);
 		}
 
-		// MCP endpoint
+		// MCP endpoint (requires Bearer auth)
 		if (path === "/mcp") {
-			const resp = await handleMcp(request, env);
-			// add CORS headers
-			for (const [k, v] of Object.entries(corsHeaders)) {
-				resp.headers.set(k, v);
+			const authFail = requireBearer(env, request);
+			if (authFail) {
+				// Add CORS headers to auth failure so browser-based clients can read it
+				authFail.headers.set("access-control-allow-origin", "*");
+				return authFail;
 			}
+			const resp = await handleMcp(request, env);
+			resp.headers.set("access-control-allow-origin", "*");
 			return resp;
 		}
 
@@ -152,6 +161,12 @@ export default {
 		// GitHub webhook
 		if (path === "/api/webhooks/github" && request.method === "POST") {
 			return handleGitHubWebhook(request, env);
+		}
+
+		// All other /api/* and /api/cell/* require Bearer auth
+		if (path.startsWith("/api/")) {
+			const authFail = requireBearer(env, request);
+			if (authFail) return authFail;
 		}
 
 		// Direct REST wrappers around MCP tools (for curl / scripts)

@@ -21,6 +21,8 @@ import {
 	getServer as hetznerGetServer,
 	deleteServer as hetznerDeleteServer,
 } from "./hetzner";
+import { validateRef, validateRepoUrl, validateShellCommand } from "./security";
+import { encrypt, decrypt } from "./crypto";
 
 interface JsonRpcRequest {
 	jsonrpc: "2.0";
@@ -240,16 +242,16 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 						);
 					}
 
-					// generate a one-time setup token (we'll store it in D1 and the cloud-init
-					// script will pass it to the agent for first registration)
+					// generate a one-time setup token (stored in D1, consumed on first agent register)
 					const setupToken = `set_${crypto.randomUUID().replace(/-/g, "")}`;
-					// Insert row first with status 'provisioning' so the agent can find itself
+					// Insert row with status 'provisioning' and the setup_token (encrypted would
+					// be overkill — this is a one-time burn credential)
 					await env.void_db
 						.prepare(
-							`INSERT INTO servers (id, name, provider, region, size, status, created_at)
-							 VALUES (?, ?, ?, ?, ?, 'provisioning', ?)`,
+							`INSERT INTO servers (id, name, provider, region, size, status, setup_token, created_at)
+							 VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?)`,
 						)
-						.bind(serverId, name, provider, region, size, now)
+						.bind(serverId, name, provider, region, size, setupToken, now)
 						.run();
 
 					// Build cloud-init user_data. The agent binary URL points to the
@@ -281,14 +283,6 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 								hs.public_net?.ipv4?.ip || null,
 								serverId,
 							)
-							.run();
-
-						// Store setup_token on the servers table too, so we can verify it
-						// when the agent registers. (For MVP we trust the agent; a hardening
-						// would be a separate setup_tokens table with TTL.)
-						await env.void_db
-							.prepare(`UPDATE servers SET agent_public_key = ? WHERE id = ?`)
-							.bind(`pending:${setupToken}`, serverId)
 							.run();
 
 						return Response.json(
@@ -332,17 +326,35 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 					const serverId = args.server_id as string;
 					const deploymentId = `dep_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
+					// Validate inputs (defense in depth)
+					const refCheck = validateRef((args.ref as string) || "main");
+					if (!refCheck.ok) {
+						return Response.json(rpcErr(id, -32001, `invalid ref: ${refCheck.reason}`));
+					}
+					const urlCheck = validateRepoUrl((args.repo_url as string) || "");
+					if (!urlCheck.ok) {
+						return Response.json(rpcErr(id, -32002, `invalid repo_url: ${urlCheck.reason}`));
+					}
+					if (args.build_command) {
+						const c = validateShellCommand(args.build_command as string, "build_command");
+						if (!c.ok) return Response.json(rpcErr(id, -32003, `build_command: ${c.reason}`));
+					}
+					if (args.serve_command) {
+						const c = validateShellCommand(args.serve_command as string, "serve_command");
+						if (!c.ok) return Response.json(rpcErr(id, -32003, `serve_command: ${c.reason}`));
+					}
+
 					// Check server exists
 					const server = await env.void_db
 						.prepare(
-							"SELECT id, status, tunnel_id, tunnel_token, tunnel_name FROM servers WHERE id = ?",
+							"SELECT id, status, tunnel_id, tunnel_token_encrypted, tunnel_name FROM servers WHERE id = ?",
 						)
 						.bind(serverId)
 						.first<{
 							id: string;
 							status: string;
 							tunnel_id: string | null;
-							tunnel_token: string | null;
+							tunnel_token_encrypted: string | null;
 							tunnel_name: string | null;
 						}>();
 					if (!server) {
@@ -359,12 +371,12 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 					let hostname: string | null = null;
 					let publicUrl: string | null = null;
 					let dnsRecordId: string | null = null;
-					let tunnelToken = server.tunnel_token;
+					let tunnelToken: string | null = null;
 					let tunnelId = server.tunnel_id;
 
 					if (env.CF_API_TOKEN && env.CF_ACCOUNT_ID && env.CF_ZONE_ID) {
 						// 1. Create tunnel on first use
-						if (!tunnelId || !tunnelToken) {
+						if (!tunnelId) {
 							try {
 								const tunnel = await createTunnel(
 									env.CF_API_TOKEN,
@@ -373,11 +385,15 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 								);
 								tunnelId = tunnel.id;
 								tunnelToken = tunnel.token;
+								// Encrypt tunnel_token before storing in D1
+								const encrypted = env.COOKIE_SECRET
+									? await encrypt(env.COOKIE_SECRET, tunnel.token)
+									: null;
 								await env.void_db
 									.prepare(
-										"UPDATE servers SET tunnel_id = ?, tunnel_name = ?, tunnel_token = ? WHERE id = ?",
+										"UPDATE servers SET tunnel_id = ?, tunnel_name = ?, tunnel_token_encrypted = ? WHERE id = ?",
 									)
-									.bind(tunnelId, tunnel.name, tunnelToken, serverId)
+									.bind(tunnelId, tunnel.name, encrypted, serverId)
 									.run();
 							} catch (e: any) {
 								return Response.json(
@@ -387,6 +403,11 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 										`Failed to create CF tunnel: ${e?.message || e}. Check CF_API_TOKEN / CF_ACCOUNT_ID.`,
 									)
 								);
+							}
+						} else {
+							// Tunnel exists — decrypt stored token
+							if (server.tunnel_token_encrypted && env.COOKIE_SECRET) {
+								tunnelToken = await decrypt(env.COOKIE_SECRET, server.tunnel_token_encrypted);
 							}
 						}
 

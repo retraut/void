@@ -10,6 +10,8 @@
  */
 
 import { Env } from "./env";
+import { validateRef, validateRepoUrl, validateShellCommand } from "./security";
+import { decrypt } from "./crypto";
 
 interface PushPayload {
 	ref: string;
@@ -89,28 +91,35 @@ export async function triggerDeploy(
 	let tunnelId: string | null = null;
 
 	const server = await env.void_db
-		.prepare("SELECT id, tunnel_id, tunnel_token FROM servers WHERE id = ?")
+		.prepare("SELECT id, tunnel_id, tunnel_token_encrypted FROM servers WHERE id = ?")
 		.bind(args.server_id)
-		.first<{ id: string; tunnel_id: string | null; tunnel_token: string | null }>();
+		.first<{ id: string; tunnel_id: string | null; tunnel_token_encrypted: string | null }>();
 	if (!server) return { error: `Server ${args.server_id} not found` };
 
 	if (env.CF_API_TOKEN && env.CF_ACCOUNT_ID && env.CF_ZONE_ID) {
 		const { createTunnel, upsertIngressRule, createDnsCname } = await import("./cf");
-		if (!server.tunnel_id || !server.tunnel_token) {
+const { encrypt } = await import("./crypto");
+		if (!server.tunnel_id) {
 			try {
 				const tunnel = await createTunnel(env.CF_API_TOKEN, env.CF_ACCOUNT_ID, `void-${server.id}`);
 				tunnelId = tunnel.id;
 				tunnelToken = tunnel.token;
+				const encrypted = env.COOKIE_SECRET
+					? await encrypt(env.COOKIE_SECRET, tunnel.token)
+					: null;
 				await env.void_db
-					.prepare("UPDATE servers SET tunnel_id = ?, tunnel_name = ?, tunnel_token = ? WHERE id = ?")
-					.bind(tunnelId, tunnel.name, tunnelToken, server.id)
+					.prepare("UPDATE servers SET tunnel_id = ?, tunnel_name = ?, tunnel_token_encrypted = ? WHERE id = ?")
+					.bind(tunnelId, tunnel.name, encrypted, server.id)
 					.run();
 			} catch (e: any) {
 				return { error: `tunnel create failed: ${e?.message || e}` };
 			}
 		} else {
 			tunnelId = server.tunnel_id;
-			tunnelToken = server.tunnel_token;
+			// Decrypt stored token
+			if (server.tunnel_token_encrypted && env.COOKIE_SECRET) {
+				tunnelToken = await decrypt(env.COOKIE_SECRET, server.tunnel_token_encrypted);
+			}
 		}
 
 		hostname = hostname || `pr-${deploymentId}`;
@@ -214,21 +223,21 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 		return new Response("missing repository.full_name", { status: 400 });
 	}
 
-	// Look up project by repo_url
+	// Look up project by exact repo URL match (defense against LIKE injection)
 	const project = await env.void_db
 		.prepare(
-			"SELECT id, server_id, slug, default_branch, default_port, build_command, serve_command FROM projects WHERE repo_url LIKE ?",
+			"SELECT id, server_id, slug, default_branch, default_port, build_command, serve_command FROM projects WHERE repo_url = ?",
 		)
-	.bind(`%${repoFullName}%`)
-	.first<{
-		id: string;
-		server_id: string;
-		slug: string;
-		default_branch: string;
-		default_port: number;
-		build_command: string | null;
-		serve_command: string | null;
-	}>();
+		.bind(`https://github.com/${repoFullName}`)
+		.first<{
+			id: string;
+			server_id: string;
+			slug: string;
+			default_branch: string;
+			default_port: number;
+			build_command: string | null;
+			serve_command: string | null;
+		}>();
 
 	if (!project) {
 		// Not a project we own. Return 200 so GitHub doesn't retry, but log.
@@ -248,6 +257,19 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 				ignored: true,
 				reason: `push to ${branch} (not default branch ${project.default_branch})`,
 			});
+		}
+		// Validate inputs (defense in depth — same checks happen in MCP path)
+		const refCheck = validateRef(branch);
+		if (!refCheck.ok) {
+			return jsonResponse({ error: refCheck.reason }, { status: 400 });
+		}
+		if (project.build_command) {
+			const c = validateShellCommand(project.build_command, "build_command");
+			if (!c.ok) return jsonResponse({ error: c.reason }, { status: 400 });
+		}
+		if (project.serve_command) {
+			const c = validateShellCommand(project.serve_command, "serve_command");
+			if (!c.ok) return jsonResponse({ error: c.reason }, { status: 400 });
 		}
 		const commitSha = push.head_commit?.id;
 		const result = await triggerDeploy(env, {
@@ -281,6 +303,19 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 				ignored: true,
 				reason: `pr targets ${baseBranch}, not ${project.default_branch}`,
 			});
+		}
+		// Validate PR ref
+		const refCheck = validateRef(prBranch);
+		if (!refCheck.ok) {
+			return jsonResponse({ error: refCheck.reason }, { status: 400 });
+		}
+		if (project.build_command) {
+			const c = validateShellCommand(project.build_command, "build_command");
+			if (!c.ok) return jsonResponse({ error: c.reason }, { status: 400 });
+		}
+		if (project.serve_command) {
+			const c = validateShellCommand(project.serve_command, "serve_command");
+			if (!c.ok) return jsonResponse({ error: c.reason }, { status: 400 });
 		}
 		const hostname = `pr-${prNumber}-${project.slug}`;
 		const result = await triggerDeploy(env, {

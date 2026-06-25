@@ -10,6 +10,7 @@ export interface Env {
 
 	// Secrets (set via wrangler secret put or via wizard)
 	COOKIE_SECRET?: string;
+	VOID_BEARER_TOKEN?: string; // required on /api/* and /mcp
 	GITHUB_CLIENT_ID?: string;
 	GITHUB_CLIENT_SECRET?: string;
 	CF_API_TOKEN?: string;
@@ -20,7 +21,7 @@ export interface Env {
 	GITHUB_WEBHOOK_SECRET?: string;
 	HETZNER_TOKEN?: string;
 	VOID_AGENT_RELEASE_TAG?: string; // e.g. "v0.1.0" — pin agent version
-	AGENT_SHARED_SECRET?: string; // used to sign WS challenges
+	AGENT_SHARED_SECRET?: string; // HMAC for deploy frames + WS challenge-response
 
 	// Durable Objects
 	void_cell: DurableObjectNamespace;

@@ -221,6 +221,36 @@ async fn handle_incoming(
             ws.send(Message::Text(serde_json::to_string(&ready)?)).await.ok();
         }
         "deploy" => {
+            // CRITICAL: Verify HMAC signature if AGENT_SHARED_SECRET is set
+            if let Some(secret) = &cfg.agent_shared_secret {
+                let sig = parsed.get("sig").and_then(|v| v.as_str());
+                if let Some(sig) = sig {
+                    // Reconstruct the payload as the canonical JSON (without sig)
+                    let mut payload = parsed.clone();
+                    payload.as_object_mut().map(|m| m.remove("sig"));
+                    let payload_str = serde_json::to_string(&payload).unwrap_or_default();
+                    let valid = verify_hmac_sha256(secret, &payload_str, sig);
+                    if !valid {
+                        warn!("HMAC signature verification FAILED for deploy — rejecting");
+                        let _ = ws
+                            .send(Message::Text(
+                                r#"{"type":"error","code":"invalid_signature"}"#.to_string(),
+                            ))
+                            .await;
+                        return Ok(());
+                    }
+                    info!("✓ deploy signature verified");
+                } else {
+                    warn!("deploy message has no signature but AGENT_SHARED_SECRET is set — rejecting");
+                    let _ = ws
+                        .send(Message::Text(
+                            r#"{"type":"error","code":"missing_signature"}"#.to_string(),
+                        ))
+                        .await;
+                    return Ok(());
+                }
+            }
+
             let deployment_id = parsed
                 .get("deployment_id")
                 .and_then(|v| v.as_str())
@@ -572,7 +602,13 @@ async fn run_deploy(
                     format!("→ ensuring cloudflared is running for tunnel...\n"),
                 )
                 .await;
-                match ensure_cloudflared(token, host).await {
+                match ensure_cloudflared(
+                    token,
+                    host,
+                    cfg.cloudflared_pid_file.as_deref().map(std::path::Path::new),
+                )
+                .await
+                {
                     Ok(()) => {
                         emit_log(
                             &mut line_no,
@@ -877,12 +913,14 @@ fn now_ts() -> u64 {
 }
 
 /// Ensure cloudflared is running for the given tunnel token. Idempotent:
-/// - if a cloudflared process is already running for this token, no-op
-/// - if cloudflared is installed but not running, start it in the background
+/// - kills any previously tracked cloudflared instance (prevents orphan leak)
+/// - if cloudflared is installed, start it in the background
 /// - if cloudflared is not installed, return an error so the caller can log
+/// - saves the new PID to a file for the next deploy to kill
 async fn ensure_cloudflared(
     tunnel_token: &str,
     _hostname: &str,
+    pid_file: Option<&std::path::Path>,
 ) -> Result<(), String> {
     // 1. check if cloudflared is on PATH
     let which = Command::new("which")
@@ -894,13 +932,24 @@ async fn ensure_cloudflared(
         return Err("cloudflared not found in PATH".to_string());
     }
 
-    // 2. check if it's already running with this token (look for the pid file
-    // cloudflared writes when run as `service install`)
-    // For MVP we just spawn it — cloudflared deduplicates connections by token.
-    // Multiple instances of the same tunnel is allowed by CF (it's a quorum).
+    // 2. Kill any previously tracked cloudflared (prevents orphan leak on every deploy)
+    if let Some(pid_path) = pid_file {
+        if let Ok(pid_str) = std::fs::read_to_string(pid_path) {
+            if let Ok(pid) = pid_str.trim().parse::<i32>() {
+                // SIGTERM the old cloudflared, then clean up the pid file
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(pid, libc::SIGTERM);
+                }
+                let _ = std::fs::remove_file(pid_path);
+                tracing::info!(old_pid = pid, "killed previous cloudflared instance");
+                // give it a moment to release the tunnel
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
 
-    // 3. start cloudflared as a background process. We do NOT wait on it.
-    // `cloudflared tunnel run --token <token>` runs forever; we let it.
+    // 3. start cloudflared as a background process
     let mut child = Command::new("cloudflared")
         .arg("tunnel")
         .arg("--no-autoupdate")
@@ -908,17 +957,26 @@ async fn ensure_cloudflared(
         .arg(tunnel_token)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(false) // we want it to outlive this function
+        .kill_on_drop(false)
         .spawn()
         .map_err(|e| format!("spawn cloudflared failed: {}", e))?;
 
-    // capture initial output (timeout so we don't block forever if it's slow)
+    let new_pid = child.id();
+
+    // Save the new PID for next-time cleanup
+    if let (Some(pid_path), Some(pid)) = (pid_file, new_pid) {
+        if let Some(parent) = pid_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(pid_path, pid.to_string());
+    }
+
+    // capture initial output (timeout so we don't block forever)
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
     if let Some(out) = stdout {
         let mut reader = BufReader::new(out).lines();
-        // Read up to ~3s of initial output to surface "tunnel registered" or errors
         let _ = tokio::time::timeout(Duration::from_secs(3), async {
             while let Ok(Some(line)) = reader.next_line().await {
                 tracing::info!(target: "cloudflared", "{}", line);
@@ -936,12 +994,43 @@ async fn ensure_cloudflared(
         .await;
     }
 
-    // Detach: don't wait on the child. We've consumed its initial output.
-    // The OS reaps it when it exits; until then it serves traffic.
+    // Detach: don't wait on the child.
     tokio::spawn(async move {
         let _ = child.wait().await;
         tracing::info!("cloudflared process exited");
     });
 
     Ok(())
+}
+
+/// Verify HMAC-SHA256 signature of a deploy message.
+/// Constant-time compare. Signature format: "v1.<hex>"
+fn verify_hmac_sha256(secret: &str, payload: &str, signature: &str) -> bool {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let expected_hex = match signature.strip_prefix("v1.") {
+        Some(h) => h,
+        None => return false,
+    };
+
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    mac.update(payload.as_bytes());
+    let expected = mac.finalize().into_bytes();
+    let expected_hex_str = hex::encode(expected);
+
+    // Constant-time compare
+    if expected_hex_str.len() != expected_hex.len() {
+        return false;
+    }
+    let diff: u32 = expected_hex_str
+        .bytes()
+        .zip(expected_hex.bytes())
+        .map(|(a, b)| (a ^ b) as u32)
+        .sum();
+    diff == 0
 }

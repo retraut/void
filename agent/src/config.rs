@@ -31,6 +31,13 @@ pub struct Config {
     /// Use {port} as placeholder for the local port.
     /// Example: "https://pr-{port}.void.example.com" or "https://{port}.loca.lt"
     pub public_url_template: String,
+
+    /// HMAC secret for verifying deploy frame signatures. If unset, signature
+    /// verification is skipped (dev mode only — production must set this).
+    pub agent_shared_secret: Option<String>,
+
+    /// Path to the cloudflared PID file (for killing the old instance on redeploy).
+    pub cloudflared_pid_file: Option<String>,
 }
 
 impl Config {
@@ -56,6 +63,9 @@ impl Config {
         let test_command = std::env::var("VOID_TEST_COMMAND").ok();
         let public_url_template = std::env::var("VOID_PUBLIC_URL_TEMPLATE")
             .unwrap_or_else(|_| "https://pr-{port}.void.example.com".to_string());
+        let agent_shared_secret = std::env::var("VOID_AGENT_SHARED_SECRET").ok();
+        let cloudflared_pid_file = std::env::var("VOID_CLOUDFLARED_PID_FILE")
+            .unwrap_or_else(|_| "/var/lib/void/cloudflared.pid".to_string());
 
         Ok(Config {
             api_base,
@@ -65,6 +75,8 @@ impl Config {
             name,
             test_command,
             public_url_template,
+            agent_shared_secret,
+            cloudflared_pid_file: Some(cloudflared_pid_file),
         })
     }
 

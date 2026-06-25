@@ -17,6 +17,54 @@ const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_USER_URL = "https://api.github.com/user";
 
+/**
+ * Verify Bearer token on /api/* and /mcp. Returns null if authorized,
+ * or a 401 Response if not. Fail-closed: if no token is configured,
+ * all requests are denied (503).
+ */
+export function requireBearer(env: Env, request: Request): Response | null {
+	if (!env.VOID_BEARER_TOKEN) {
+		return new Response(
+			JSON.stringify({
+				error: "auth_not_configured",
+				message:
+					"VOID_BEARER_TOKEN not set. Set via: wrangler secret put VOID_BEARER_TOKEN",
+			}),
+			{ status: 503, headers: { "content-type": "application/json" } },
+		);
+	}
+	const auth = request.headers.get("Authorization") || "";
+	// Support both "Bearer X" and "?token=X" (for dev convenience with MCP clients)
+	let token = "";
+	if (auth.startsWith("Bearer ")) {
+		token = auth.slice(7).trim();
+	} else {
+		try {
+			const url = new URL(request.url);
+			token = url.searchParams.get("token") || "";
+		} catch {}
+	}
+	if (!token || token !== env.VOID_BEARER_TOKEN) {
+		return new Response(
+			JSON.stringify({ error: "unauthorized", message: "invalid or missing bearer token" }),
+			{ status: 401, headers: { "content-type": "application/json" } },
+		);
+	}
+	return null;
+}
+
+/**
+ * Constant-time string compare to prevent timing attacks on secrets.
+ */
+export function timingSafeEqual(a: string, b: string): boolean {
+	if (a.length !== b.length) return false;
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) {
+		diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+	}
+	return diff === 0;
+}
+
 interface GithubUser {
 	login: string;
 	id: number;

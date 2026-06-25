@@ -3,7 +3,15 @@
  *
  * Holds the WebSocket connection to the agent, broadcasts log lines
  * to SSE subscribers, serializes tunnel-config writes via blockConcurrencyWhile.
+ *
+ * Security:
+ * - /cell/* routes require Bearer auth (except WS upgrade which validates setup_token)
+ * - Deploy messages are HMAC-signed with AGENT_SHARED_SECRET (signed by Worker,
+ *   verified by agent before executing commands)
+ * - setup_token is one-time: validated against D1, then marked consumed
  */
+
+import { Env } from "./env";
 
 interface AgentMessage {
 	type: "register" | "heartbeat" | "log" | "deploy_done" | "exec_result" | "ready";
@@ -42,7 +50,7 @@ interface WorkerToAgent {
 
 export class VoidCell {
 	private state: DurableObjectState;
-	private env: any;
+	private env: Env;
 	private ws: WebSocket | null = null;
 	private agentPublicKey: string | null = null;
 	private serverId: string | null = null;
@@ -51,7 +59,7 @@ export class VoidCell {
 	private sseClients: Set<WritableStreamDefaultWriter> = new Set();
 	private logBuffer: Array<{ deployment_id: string; stream: string; data: string; ts: number }> = [];
 
-	constructor(state: DurableObjectState, env: any) {
+	constructor(state: DurableObjectState, env: Env) {
 		this.state = state;
 		this.env = env;
 	}
@@ -78,10 +86,26 @@ export class VoidCell {
 			if (!this.ws || !this.registered) {
 				return Response.json({ error: "Agent not connected" }, { status: 503 });
 			}
-			const msg: WorkerToAgent = {
+			// Validate inputs (defense in depth — mcp.ts/webhook.ts also validate)
+			const { validateRef, validateRepoUrl, validateShellCommand } = await import("./security");
+			const refCheck = validateRef(body.ref || "");
+			if (!refCheck.ok) return Response.json({ error: refCheck.reason }, { status: 400 });
+			const urlCheck = validateRepoUrl(body.repo_url || "");
+			if (!urlCheck.ok) return Response.json({ error: urlCheck.reason }, { status: 400 });
+			if (body.build_command) {
+				const c = validateShellCommand(body.build_command, "build_command");
+				if (!c.ok) return Response.json({ error: c.reason }, { status: 400 });
+			}
+			if (body.serve_command) {
+				const c = validateShellCommand(body.serve_command, "serve_command");
+				if (!c.ok) return Response.json({ error: c.reason }, { status: 400 });
+			}
+
+			// Build the deploy message and HMAC-sign it
+			const deployMsg: WorkerToAgent = {
 				type: "deploy",
 				deployment_id: body.deployment_id,
-				repo_url: body.repo_url,
+				repo_url: urlCheck.normalized,
 				ref: body.ref,
 				env: body.env,
 				build_command: body.build_command,
@@ -92,8 +116,13 @@ export class VoidCell {
 				tunnel_token: body.tunnel_token,
 				tunnel_id: body.tunnel_id,
 			};
-			this.ws.send(JSON.stringify(msg));
-			return Response.json({ ok: true, sent: msg });
+			if (env.AGENT_SHARED_SECRET) {
+				const { signWithAgentSecret } = await import("./security");
+				const payload = JSON.stringify(deployMsg);
+				deployMsg.sig = await signWithAgentSecret(env.AGENT_SHARED_SECRET, payload);
+			}
+			this.ws.send(JSON.stringify(deployMsg));
+			return Response.json({ ok: true, sent: deployMsg, signed: !!deployMsg.sig });
 		}
 
 		// Internal: subscribe to log stream (SSE)
@@ -119,7 +148,7 @@ export class VoidCell {
 	// Hibernation API: required methods on the Durable Object class
 	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		const raw = typeof message === "string" ? message : new TextDecoder().decode(message);
-		this.handleAgentMessage(raw);
+		await this.handleAgentMessage(raw);
 	}
 
 	async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
@@ -132,7 +161,7 @@ export class VoidCell {
 		this.registered = false;
 	}
 
-	private handleAgentMessage(raw: string) {
+	private async handleAgentMessage(raw: string): Promise<void> {
 		let msg: AgentMessage;
 		try {
 			msg = JSON.parse(raw);
@@ -141,15 +170,55 @@ export class VoidCell {
 		}
 
 		if (msg.type === "register") {
+			// Validate setup_token against D1 (one-time use)
+			const serverId = msg.server_id;
+			const token = msg.setup_token;
+			if (!serverId) {
+				this.ws?.send(JSON.stringify({ type: "error", code: "missing_server_id" }));
+				try { this.ws?.close(1008, "missing server_id"); } catch {}
+				this.ws = null;
+				return;
+			}
+
+			const row = await this.env.void_db
+				.prepare(
+					"SELECT setup_token, setup_token_consumed_at FROM servers WHERE id = ?",
+				)
+				.bind(serverId)
+				.first<{ setup_token: string | null; setup_token_consumed_at: number | null }>();
+
+			if (!row) {
+				this.ws?.send(JSON.stringify({ type: "error", code: "unknown_server" }));
+				try { this.ws?.close(1008, "unknown server"); } catch {}
+				this.ws = null;
+				return;
+			}
+			if (row.setup_token_consumed_at) {
+				this.ws?.send(JSON.stringify({ type: "error", code: "token_already_used" }));
+				try { this.ws?.close(1008, "setup_token already used"); } catch {}
+				this.ws = null;
+				return;
+			}
+			if (!row.setup_token || row.setup_token !== token) {
+				this.ws?.send(JSON.stringify({ type: "error", code: "invalid_token" }));
+				try { this.ws?.close(1008, "invalid setup_token"); } catch {}
+				this.ws = null;
+				return;
+			}
+
+			// Token is valid — consume it (one-time use) and store public key
+			const now = Math.floor(Date.now() / 1000);
+			await this.env.void_db
+				.prepare(
+					"UPDATE servers SET setup_token = NULL, setup_token_consumed_at = ?, agent_public_key = ? WHERE id = ?",
+				)
+				.bind(now, msg.public_key || null, serverId)
+				.run();
+
 			this.registered = true;
-			this.serverId = msg.server_id || null;
+			this.serverId = serverId;
 			this.agentPublicKey = msg.public_key || null;
 			this.lastHeartbeat = Date.now();
-			// persist to D1
-			if (this.serverId) {
-				this.state.storage.put(`server:${this.serverId}:registered`, Date.now());
-			}
-			// ack
 			this.ws?.send(JSON.stringify({ type: "registered" }));
 			return;
 		}
