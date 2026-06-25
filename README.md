@@ -1,12 +1,12 @@
 # void
 
-**Vercel DX. Hetzner bill. No SSH.**
+**Best-in-class DX. Hetzner pricing. No SSH.**
 
-Self-hosted, edge-driven PaaS with MCP-native AI deploys. Push to git → live URL. Your AI calls `void_deploy` from Cursor. No SSH, no dashboard, no DevOps.
+Self-hosted, edge-driven PaaS with MCP-native AI deploys. Push to git → live URL. Your AI calls `void_deploy` via MCP. No SSH, no dashboard, no DevOps.
 
 ## What is this?
 
-void is the **convenient self-hosted alternative to Vercel** for the AI coding era. It's a Cloudflare Worker (control plane) + a Rust agent (runs on your Hetzner/DO VPS) + cloudflared tunnels (no open ports). Git push auto-deploys, MCP tools let your AI deploy, preview URLs are automatic per PR.
+void is a self-hosted, edge-driven PaaS for the AI coding era. It's a Cloudflare Worker (control plane) + a Rust agent (runs on your Hetzner/DO VPS) + cloudflared tunnels (no open ports). Git push auto-deploys, MCP tools let your AI deploy, preview URLs are automatic per PR.
 
 Zero DevOps. Zero CI. Zero lock-in. Zero idle cost. Zero friction.
 

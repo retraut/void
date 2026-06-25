@@ -1,13 +1,13 @@
 # void — Technical Specification v0.1
 
-**Tagline:** Vercel DX. Hetzner bill. No SSH.
-**Longer pitch:** Your AI deploys. You don't SSH. You pay €4/mo to Hetzner, not $20/mo to Vercel.
+**Tagline:** Best-in-class DX. Hetzner pricing. No SSH.
+**Longer pitch:** Your AI deploys. You don't SSH. You pay €4/mo to Hetzner, not $20/mo to a managed PaaS.
 
 ---
 
 ## Philosophy
 
-void is the **convenient self-hosted alternative to Vercel** for the AI coding era. The browser is optional. The terminal is optional. The AI agent in your IDE is the user.
+void is a self-hosted, edge-driven PaaS for the AI coding era. The browser is optional. The terminal is optional. The AI agent in your IDE is the user.
 
 We are not "yet another self-hosted PaaS". Self-hosting exists (Coolify, Dokku, Devpush) but it's painful: SSH into a server, maintain a 200MB control plane, click through a web UI. void flips that: control plane lives on Cloudflare's edge (free, maintained by someone else), your VMs are dumb Docker hosts, your AI is the operator.
 
