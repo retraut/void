@@ -501,7 +501,7 @@ export async function renderDashboardPage(
 	const [servers, projects, deploys, recent] = await Promise.all([
 		env.void_db.prepare("SELECT COUNT(*) AS n FROM servers").first<{ n: number }>(),
 		env.void_db.prepare("SELECT COUNT(*) AS n FROM projects").first<{ n: number }>(),
-		env.void_db.prepare("SELECT COUNT(*) AS n FROM deployments WHERE created_at > unixepoch() - 86400").first<{ n: number }>(),
+		env.void_db.prepare("SELECT COUNT(*) AS n FROM deployments WHERE started_at > unixepoch() - 86400").first<{ n: number }>(),
 		env.void_db
 			.prepare(
 				`SELECT d.id, d.status, d.started_at, d.public_url, p.name AS project_name
