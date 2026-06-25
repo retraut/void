@@ -313,7 +313,19 @@ export function renderLandingHtml(opts: {
 
 	const topRight = `<div class="top-right">
 		<a href="https://github.com/void-sh/void" class="gh-link" target="_blank" rel="noopener" title="View on GitHub">${octocat}</a>
-		${opts.user ? `<div class="user-mini"><img src="${escapeHtml(opts.user.avatar_url || "")}" alt="" width="20" height="20"><span>@${escapeHtml(opts.user.username)}</span><a href="/api/auth/logout" class="link-mute">logout</a></div>` : ""}
+		${opts.user ? `<details class="user-menu">
+			<summary>
+				<img src="${escapeHtml(opts.user.avatar_url || "")}" alt="" width="24" height="24">
+				<span>@${escapeHtml(opts.user.username)}</span>
+			</summary>
+			<div class="user-menu-pop">
+				<a href="/servers">Servers</a>
+				<a href="/projects">Projects</a>
+				<a href="/deployments">Deployments</a>
+				<hr>
+				<a href="/api/auth/logout">logout</a>
+			</div>
+		</details>` : ""}
 	</div>`;
 
 	return `<!doctype html>
@@ -330,8 +342,16 @@ export function renderLandingHtml(opts: {
   .gh-link{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;color:#888;transition:color 0.15s}
   .gh-link:hover{color:#fff}
   .gh-link svg{width:22px;height:22px}
-  .user-mini{display:flex;align-items:center;gap:6px;font-size:0.85rem;color:#999}
-  .user-mini img{border-radius:50%}
+  .user-menu{position:relative}
+  .user-menu summary{list-style:none;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;cursor:pointer;color:#999;font-size:0.9rem;transition:background 0.15s;user-select:none}
+  .user-menu summary::-webkit-details-marker{display:none}
+  .user-menu summary:hover{background:#1a1a1a;color:#fff}
+  .user-menu[open] summary{background:#1a1a1a;color:#fff}
+  .user-menu img{border-radius:50%;display:block}
+  .user-menu-pop{position:absolute;top:calc(100% + 8px);right:0;background:#0a0a0a;border:1px solid #222;border-radius:10px;padding:6px;min-width:180px;box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:10;display:flex;flex-direction:column;gap:2px}
+  .user-menu-pop a{display:block;padding:8px 12px;border-radius:6px;color:#ccc;font-size:0.9rem;text-decoration:none;transition:background 0.1s}
+  .user-menu-pop a:hover{background:#1a1a1a;color:#fff}
+  .user-menu-pop hr{border:0;border-top:1px solid #222;margin:4px 6px}
   h1{font-size:4rem;font-weight:800;letter-spacing:-0.04em;line-height:1;margin-bottom:24px}
   h1 span{background:linear-gradient(120deg,#fff 0%,#666 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
   .sub{font-size:1.25rem;color:#999;margin-bottom:32px;line-height:1.5}
@@ -380,9 +400,9 @@ export function renderLandingHtml(opts: {
       <a href="/servers" class="btn btn-secondary">Servers</a>
       <a href="/projects" class="btn btn-secondary">Projects</a>
       <a href="/deployments" class="btn btn-secondary">Deployments</a>
-      <a href="/api/auth/github?action=new-server" class="btn btn-primary">+ New Server</a>
+      <a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">+ New Server</a>
     ` : `
-      <a href="/api/auth/github" class="btn btn-primary">Get started with GitHub</a>
+      <a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">Get started with GitHub</a>
     `}
   </div>
 

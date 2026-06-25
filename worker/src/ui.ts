@@ -7,10 +7,30 @@
 
 import { Env } from "./env";
 
+/**
+ * User dropdown menu — click avatar to expand. Pure HTML, no JS.
+ * Used in both the landing page and the UI topbar.
+ */
+function userMenu(user: { username: string; avatar_url: string | null }): string {
+	return `<details class="user-menu">
+		<summary>
+			<img src="${escape(user.avatar_url || "")}" alt="" width="24" height="24">
+			<span>@${escape(user.username)}</span>
+		</summary>
+		<div class="user-menu-pop">
+			<a href="/servers">Servers</a>
+			<a href="/projects">Projects</a>
+			<a href="/deployments">Deployments</a>
+			<hr>
+			<a href="/api/auth/logout">logout</a>
+		</div>
+	</details>`;
+}
+
 function html(content: string, title: string, opts: { user?: { username: string; avatar_url: string | null } | null } = {}): Response {
 	const userBlock = opts.user
-		? `<div class="user"><img src="${escape(opts.user.avatar_url || "")}" alt="" width="24" height="24"><span>@${escape(opts.user.username)}</span><a href="/api/auth/logout" class="link-mute">logout</a></div>`
-		: `<a href="/api/auth/github" class="btn btn-primary">Sign in</a>`;
+		? userMenu(opts.user)
+		: `<a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">Sign in</a>`;
 
 	const page = `<!doctype html>
 <html lang="en">
@@ -28,8 +48,16 @@ function html(content: string, title: string, opts: { user?: { username: string;
   .nav a{color:#888;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:0.9rem;font-weight:500}
   .nav a:hover{color:#fff;background:#1a1a1a}
   .nav a.active{color:#fff;background:#1a1a1a}
-  .user{display:flex;align-items:center;gap:8px;padding:6px 12px;background:#0a0a0a;border-radius:8px;font-size:0.9rem}
-  .user img{border-radius:50%}
+  .user-menu{position:relative}
+  .user-menu summary{list-style:none;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;cursor:pointer;color:#999;font-size:0.9rem;transition:background 0.15s;user-select:none}
+  .user-menu summary::-webkit-details-marker{display:none}
+  .user-menu summary:hover{background:#1a1a1a;color:#fff}
+  .user-menu[open] summary{background:#1a1a1a;color:#fff}
+  .user-menu img{border-radius:50%;display:block}
+  .user-menu-pop{position:absolute;top:calc(100% + 8px);right:0;background:#0a0a0a;border:1px solid #222;border-radius:10px;padding:6px;min-width:180px;box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:10;display:flex;flex-direction:column;gap:2px}
+  .user-menu-pop a{display:block;padding:8px 12px;border-radius:6px;color:#ccc;font-size:0.9rem;text-decoration:none;transition:background 0.1s}
+  .user-menu-pop a:hover{background:#1a1a1a;color:#fff}
+  .user-menu-pop hr{border:0;border-top:1px solid #222;margin:4px 6px}
   .link-mute{color:#666;text-decoration:none;font-size:0.85rem;margin-left:8px}
   .link-mute:hover{color:#fff}
   .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:6px;font-size:0.9rem;font-weight:600;text-decoration:none;border:1px solid transparent;cursor:pointer}
