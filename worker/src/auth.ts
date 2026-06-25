@@ -287,15 +287,20 @@ function authInterstitial(opts: {
 	redirectTo: string;
 	delayMs: number;
 }): string {
-	const title = opts.kind === "login" ? `Welcome back, @${opts.username}` : "Logged out";
+	const title =
+		opts.kind === "login"
+			? `Welcome back, @${opts.username}`
+			: "See you in the void";
 	const subtitle =
 		opts.kind === "login"
-			? "Signed in via GitHub. Redirecting…"
-			: "Session cleared. Redirecting to home…";
+			? "Returning to the void."
+			: "The void will be empty without you.";
+	const tagline =
+		opts.kind === "login" ? "entering the void…" : "returning to nothing…";
 	const avatar =
 		opts.avatarUrl && opts.kind === "login"
 			? `<img class="avatar" src="${opts.avatarUrl}" alt="">`
-			: `<div class="avatar avatar-empty">✓</div>`;
+			: `<div class="avatar avatar-empty">∅</div>`;
 
 	return `<!doctype html>
 <html lang="en">
@@ -326,7 +331,7 @@ function authInterstitial(opts: {
   <h1>${escapeHtml(title)}</h1>
   <p>${escapeHtml(subtitle)}</p>
   <div class="progress"><div class="progress-bar"></div></div>
-  <p><span class="spinner"></span>redirecting…</p>
+  <p><span class="spinner"></span>${escapeHtml(tagline)}</p>
   <a class="skip" href="${escapeHtml(opts.redirectTo)}">skip →</a>
 </div>
 <script>
