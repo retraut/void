@@ -42,8 +42,14 @@ const ICONS = {
 /**
  * Sidebar layout — Vercel-style fixed left nav, scrollable right content.
  * Active item is highlighted via the `current` prop (path prefix match).
+ * If `currentProject` is set, a switcher is shown at the top of the sidebar.
  */
-function sidebar(current: string, user: { username: string; avatar_url: string | null } | null): string {
+function sidebar(
+	current: string,
+	user: { username: string; avatar_url: string | null } | null,
+	currentProject: { id: string; name: string; slug: string } | null,
+	projects: Array<{ id: string; name: string; slug: string }>,
+): string {
 	const isActive = (prefix: string) => current === prefix || current.startsWith(prefix + "/") ? "active" : "";
 	const items = [
 		{ href: "/dashboard", label: "Dashboard", icon: ICONS.dashboard, match: "/dashboard" },
@@ -60,20 +66,53 @@ function sidebar(current: string, user: { username: string; avatar_url: string |
 			</a>`,
 		)
 		.join("");
+
+	// Project switcher — shown only if user has at least one project.
+	// Native <select> + onchange=submit keeps it zero-JS and works on mobile.
+	const switcher = projects.length > 0
+		? `<form method="POST" action="/projects/select" class="project-switcher">
+			<label class="switcher-label">PROJECT</label>
+			<select name="project_id" onchange="this.form.submit()" aria-label="Switch project">
+				<option value="" ${!currentProject ? "selected" : ""}>All projects</option>
+				${projects
+					.map(
+						(p) => `<option value="${escape(p.id)}" ${currentProject?.id === p.id ? "selected" : ""}>${escape(p.name)}</option>`,
+					)
+					.join("")}
+			</select>
+			<noscript><button type="submit" class="btn btn-secondary" style="margin-top:6px;width:100%">Switch</button></noscript>
+		</form>`
+		: "";
+
 	const userBlock = user
 		? `<div class="sidebar-user">${userMenu(user)}</div>`
 		: `<a class="sidebar-signin" href="/api/auth/github?returnTo=%2Fdashboard">Sign in</a>`;
 
 	return `<aside class="sidebar">
 		<a class="sidebar-logo" href="/dashboard">void</a>
+		${switcher}
 		<nav class="sidebar-nav">${navItems}</nav>
 		<div class="sidebar-footer">${userBlock}</div>
 	</aside>`;
 }
 
-function html(content: string, title: string, opts: { user?: { username: string; avatar_url: string | null } | null; current?: string } = {}): Response {
+function html(
+	content: string,
+	title: string,
+	opts: {
+		user?: { id: string; username: string; avatar_url: string | null } | null;
+		current?: string;
+		currentProject?: { id: string; name: string; slug: string } | null;
+		projects?: Array<{ id: string; name: string; slug: string }>;
+	} = {},
+): Response {
 	const current = opts.current || "";
-	const sidebarBlock = sidebar(current, opts.user || null);
+	const sidebarBlock = sidebar(
+		current,
+		opts.user || null,
+		opts.currentProject || null,
+		opts.projects || [],
+	);
 
 	const page = `<!doctype html>
 <html lang="en">
@@ -138,6 +177,13 @@ function html(content: string, title: string, opts: { user?: { username: string;
   .btn-secondary{background:#1a1a1a;color:#fff;border-color:#333}
   .btn-danger{background:#1a0a0a;color:#f44;border-color:#533}
   .btn-danger:hover{background:#2a0a0a;border-color:#f44}
+
+  /* Project switcher (top of sidebar) */
+  .project-switcher{margin-bottom:8px;padding-bottom:16px;border-bottom:1px solid #1a1a1a}
+  .switcher-label{color:#666;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;display:block;margin-bottom:6px;padding:0 4px;font-weight:600}
+  .project-switcher select{width:100%;background:#0a0a0a;border:1px solid #222;border-radius:8px;color:#fff;padding:8px 10px;font-size:0.85rem;font-family:inherit;cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
+  .project-switcher select:hover{border-color:#333}
+  .project-switcher select:focus{outline:none;border-color:#6cf}
 
   /* User menu (in sidebar) */
   .user-menu{position:relative;width:100%}
@@ -210,13 +256,32 @@ function timeAgo(epochSeconds: number | null): string {
 
 // ============== Servers page ==============
 
-export async function renderServersPage(env: Env, user: { username: string; avatar_url: string | null } | null): Promise<Response> {
+export async function renderServersPage(
+	c: any,
+	user: { id: string; username: string; avatar_url: string | null } | null,
+): Promise<Response> {
+	const env = c.env;
+	const { getCurrentProject } = await import("./state");
+	const currentProject = await getCurrentProject(c);
+	const projectId = currentProject?.id || null;
+
+	const whereClause = projectId
+		? `WHERE p.id = ? AND p.user_id = ?`
+		: `WHERE s.user_id = ?`;
+	const bindArgs = projectId
+		? [projectId, user!.id]
+		: [user!.id];
+
 	const { results } = await env.void_db
 		.prepare(
 			`SELECT s.id, s.name, s.provider, s.status, s.region, s.size, s.last_seen_at, s.tunnel_id IS NOT NULL AS has_tunnel,
 			        (SELECT COUNT(*) FROM deployments d WHERE d.server_id = s.id) AS deployment_count
-			 FROM servers s ORDER BY s.created_at DESC`,
+			 FROM servers s
+			 ${projectId ? "INNER JOIN projects p ON p.server_id = s.id" : ""}
+			 ${whereClause}
+			 ORDER BY s.created_at DESC`,
 		)
+		.bind(...bindArgs)
 		.all<{ id: string; name: string; provider: string; status: string; region: string; size: string; last_seen_at: number | null; has_tunnel: number; deployment_count: number }>();
 
 	const body = `
@@ -255,20 +320,42 @@ ${results.length === 0
 			.join("")}
 		</tbody>
 	</table></div>`}`;
-	return html(body, "Servers", { user, current: "/servers" });
+	const allProjects = user ? await env.void_db
+		.prepare("SELECT id, name, slug FROM projects WHERE user_id = ? ORDER BY created_at DESC")
+		.bind(user.id)
+		.all<{ id: string; name: string; slug: string }>() : { results: [] };
+	return html(body, "Servers", {
+		user,
+		current: "/servers",
+		currentProject,
+		projects: allProjects.results,
+	});
 }
 
 // ============== Projects page ==============
 
-export async function renderProjectsPage(env: Env, user: { username: string; avatar_url: string | null } | null): Promise<Response> {
+export async function renderProjectsPage(
+	c: any,
+	user: { id: string; username: string; avatar_url: string | null } | null,
+): Promise<Response> {
+	const env = c.env;
+	const { getCurrentProject } = await import("./state");
+	const currentProject = await getCurrentProject(c);
+	const projects = user ? await env.void_db
+		.prepare("SELECT id, name, slug FROM projects WHERE user_id = ? ORDER BY created_at DESC")
+		.bind(user.id)
+		.all<{ id: string; name: string; slug: string }>() : { results: [] };
+
 	const { results } = await env.void_db
 		.prepare(
 			`SELECT p.id, p.slug, p.name, p.repo_url, p.default_branch, p.default_port,
 			        s.name AS server_name, s.id AS server_id,
 			        (SELECT COUNT(*) FROM deployments d WHERE d.project_id = p.id) AS deployment_count
 			 FROM projects p LEFT JOIN servers s ON s.id = p.server_id
+			 WHERE p.user_id = ?
 			 ORDER BY p.created_at DESC`,
 		)
+		.bind(user!.id)
 		.all<{ id: string; slug: string; name: string; repo_url: string; default_branch: string; default_port: number; server_name: string | null; server_id: string | null; deployment_count: number }>();
 
 	const body = `
@@ -301,31 +388,46 @@ ${results.length === 0
 			.join("")}
 		</tbody>
 	</table></div>`}`;
-	return html(body, "Projects", { user, current: "/projects" });
+	return html(body, "Projects", {
+		user,
+		current: "/projects",
+		currentProject,
+		projects: projects.results,
+	});
 }
 
 // ============== Deployments page ==============
 
 export async function renderDeploymentsPage(
-	env: Env,
-	user: { username: string; avatar_url: string | null } | null,
+	c: any,
+	user: { id: string; username: string; avatar_url: string | null } | null,
 	projectFilter: string | null,
 	page: number = 1,
 	perPage: number = 20,
 ): Promise<Response> {
+	const env = c.env;
+	const { getCurrentProject } = await import("./state");
+	const currentProject = await getCurrentProject(c);
+	const projects = user ? await env.void_db
+		.prepare("SELECT id, name, slug FROM projects WHERE user_id = ? ORDER BY created_at DESC")
+		.bind(user.id)
+		.all<{ id: string; name: string; slug: string }>() : { results: [] };
+
+	// If no explicit projectFilter, use the current project from cookie.
+	const effectiveFilter = projectFilter || currentProject?.id || null;
 	const offset = (page - 1) * perPage;
 
 	// Total count for pagination
-	const countQuery = projectFilter
+	const countQuery = effectiveFilter
 		? "SELECT COUNT(*) AS n FROM deployments WHERE project_id = ?"
 		: "SELECT COUNT(*) AS n FROM deployments";
-	const countRow = projectFilter
-		? await env.void_db.prepare(countQuery).bind(projectFilter).first<{ n: number }>()
+	const countRow = effectiveFilter
+		? await env.void_db.prepare(countQuery).bind(effectiveFilter).first<{ n: number }>()
 		: await env.void_db.prepare(countQuery).first<{ n: number }>();
 	const total = countRow?.n || 0;
 	const totalPages = Math.max(1, Math.ceil(total / perPage));
 
-	const query = projectFilter
+	const query = effectiveFilter
 		? `SELECT d.id, d.ref, d.status, d.started_at, d.finished_at, d.duration_ms, d.hostname, d.public_url, d.commit_sha,
 		        p.name AS project_name, p.slug AS project_slug, s.name AS server_name
 		 FROM deployments d LEFT JOIN projects p ON p.id = d.project_id LEFT JOIN servers s ON s.id = d.server_id
@@ -335,8 +437,8 @@ export async function renderDeploymentsPage(
 		 FROM deployments d LEFT JOIN projects p ON p.id = d.project_id LEFT JOIN servers s ON s.id = d.server_id
 		 ORDER BY d.started_at DESC LIMIT ? OFFSET ?`;
 
-	const stmt = projectFilter
-		? env.void_db.prepare(query).bind(projectFilter, perPage, offset)
+	const stmt = effectiveFilter
+		? env.void_db.prepare(query).bind(effectiveFilter, perPage, offset)
 		: env.void_db.prepare(query).bind(perPage, offset);
 	const { results } = await stmt.all<{
 		id: string; ref: string; status: string; started_at: number; finished_at: number | null;
@@ -345,7 +447,7 @@ export async function renderDeploymentsPage(
 	}>();
 
 	const body = `
-<h1>Deployments${projectFilter ? ` <span class="meta" style="font-weight:400">— filtered</span>` : ""}</h1>
+<h1>Deployments${currentProject ? ` <span class="sub-meta">— ${escape(currentProject.name)}</span>` : ""}</h1>
 ${results.length === 0
 	? `<div class="card empty"><h2>No deployments yet</h2><p>Deployments appear here when you push code (via webhook) or call <code>void_deploy</code>.</p></div>`
 	: `<div class="card"><table>
@@ -378,16 +480,29 @@ ${results.length === 0
 		${page > 1 ? `<a href="?${projectFilter ? `project=${escape(projectFilter)}&` : ""}page=${page - 1}&per_page=${perPage}">← prev</a>` : ""}
 		${page < totalPages ? `<a href="?${projectFilter ? `project=${escape(projectFilter)}&` : ""}page=${page + 1}&per_page=${perPage}">next →</a>` : ""}
 	</div>`}`;
-	return html(body, "Deployments", { user, current: "/deployments" });
+	return html(body, "Deployments", {
+		user,
+		current: "/deployments",
+		currentProject,
+		projects: projects.results,
+	});
 }
 
 // ============== Single deployment log viewer ==============
 
 export async function renderDeploymentLogsPage(
-	env: Env,
-	user: { username: string; avatar_url: string | null } | null,
+	c: any,
+	user: { id: string; username: string; avatar_url: string | null } | null,
 	deploymentId: string,
 ): Promise<Response> {
+	const env = c.env;
+	const { getCurrentProject } = await import("./state");
+	const currentProject = await getCurrentProject(c);
+	const projects = user ? await env.void_db
+		.prepare("SELECT id, name, slug FROM projects WHERE user_id = ? ORDER BY created_at DESC")
+		.bind(user.id)
+		.all<{ id: string; name: string; slug: string }>() : { results: [] };
+
 	const dep = await env.void_db
 		.prepare(
 			`SELECT d.*, s.id AS server_id, s.name AS server_name, p.name AS project_name
@@ -483,7 +598,12 @@ export async function renderDeploymentLogsPage(
 	// but for the EventSource to work cross-origin, we use the ?token= fallback. For same-origin (the UI),
 	// the cookie is sufficient and the ?token= is ignored.
 
-	return html(body, `${dep.id} · logs`, { user, current: "/deployments" });
+	return html(body, `${dep.id} · logs`, {
+		user,
+		current: "/deployments",
+		currentProject,
+		projects: projects.results,
+	});
 }
 
 // ============================================================
@@ -495,26 +615,53 @@ export async function renderDeploymentLogsPage(
  * to keep latency low. Falls back to 0s on empty DB.
  */
 export async function renderDashboardPage(
-	env: Env,
-	user: { username: string; avatar_url: string | null } | null,
+	c: any,
+	user: { id: string; username: string; avatar_url: string | null } | null,
 ): Promise<Response> {
+	const env = c.env;
+	const { getCurrentProject } = await import("./state");
+	const currentProject = await getCurrentProject(c);
+	const projectId = currentProject?.id || null;
+
+	// Project list for the sidebar switcher
+	const allProjects = user ? await env.void_db
+		.prepare("SELECT id, name, slug FROM projects WHERE user_id = ? ORDER BY created_at DESC")
+		.bind(user.id)
+		.all<{ id: string; name: string; slug: string }>() : { results: [] };
+
+	// Filter queries by current project (1:1 project→server via projects.server_id)
 	const [servers, projects, deploys, recent] = await Promise.all([
-		env.void_db.prepare("SELECT COUNT(*) AS n FROM servers").first<{ n: number }>(),
-		env.void_db.prepare("SELECT COUNT(*) AS n FROM projects").first<{ n: number }>(),
-		env.void_db.prepare("SELECT COUNT(*) AS n FROM deployments WHERE started_at > unixepoch() - 86400").first<{ n: number }>(),
-		env.void_db
-			.prepare(
-				`SELECT d.id, d.status, d.started_at, d.public_url, p.name AS project_name
-				 FROM deployments d LEFT JOIN projects p ON p.id = d.project_id
-				 ORDER BY d.started_at DESC LIMIT 8`,
-			)
-			.all<{ id: string; status: string; started_at: number; public_url: string | null; project_name: string | null }>(),
+		projectId
+			? env.void_db.prepare("SELECT COUNT(*) AS n FROM servers s INNER JOIN projects p ON p.server_id = s.id WHERE p.id = ? AND p.user_id = ?").bind(projectId, user.id).first<{ n: number }>()
+			: env.void_db.prepare("SELECT COUNT(*) AS n FROM servers WHERE user_id = ?").bind(user.id).first<{ n: number }>(),
+		projectId
+			? env.void_db.prepare("SELECT COUNT(*) AS n FROM projects WHERE user_id = ? AND id = ?").bind(user.id, projectId).first<{ n: number }>()
+			: env.void_db.prepare("SELECT COUNT(*) AS n FROM projects WHERE user_id = ?").bind(user.id).first<{ n: number }>(),
+		projectId
+			? env.void_db.prepare("SELECT COUNT(*) AS n FROM deployments WHERE project_id = ? AND started_at > unixepoch() - 86400").bind(projectId).first<{ n: number }>()
+			: env.void_db.prepare("SELECT COUNT(*) AS n FROM deployments WHERE started_at > unixepoch() - 86400").first<{ n: number }>(),
+		projectId
+			? env.void_db
+				.prepare(
+					`SELECT d.id, d.status, d.started_at, d.public_url, p.name AS project_name
+					 FROM deployments d LEFT JOIN projects p ON p.id = d.project_id
+					 WHERE d.project_id = ? ORDER BY d.started_at DESC LIMIT 8`,
+				)
+				.bind(projectId)
+				.all<{ id: string; status: string; started_at: number; public_url: string | null; project_name: string | null }>()
+			: env.void_db
+				.prepare(
+					`SELECT d.id, d.status, d.started_at, d.public_url, p.name AS project_name
+					 FROM deployments d LEFT JOIN projects p ON p.id = d.project_id
+					 ORDER BY d.started_at DESC LIMIT 8`,
+				)
+				.all<{ id: string; status: string; started_at: number; public_url: string | null; project_name: string | null }>(),
 	]);
 
 	const stats = [
-		{ label: "Servers", value: servers?.n ?? 0, sub: "active hosts" },
-		{ label: "Projects", value: projects?.n ?? 0, sub: "registered repos" },
-		{ label: "Deploys (24h)", value: deploys?.n ?? 0, sub: "last 24 hours" },
+		{ label: "Servers", value: servers?.n ?? 0, sub: currentProject ? "in this project" : "active hosts" },
+		{ label: "Projects", value: projects?.n ?? 0, sub: currentProject ? "selected" : "registered repos" },
+		{ label: "Deploys (24h)", value: deploys?.n ?? 0, sub: currentProject ? "this project, 24h" : "last 24 hours" },
 	];
 
 	const recentRows = (recent?.results || []).map(
@@ -528,7 +675,7 @@ export async function renderDashboardPage(
 	).join("");
 
 	const body = `
-<h1>Dashboard</h1>
+<h1>Dashboard${currentProject ? ` <span class="sub-meta">— ${escape(currentProject.name)}</span>` : ""}</h1>
 
 <div class="stats">
 	${stats
@@ -558,7 +705,12 @@ export async function renderDashboardPage(
 </div>
 `;
 
-	return html(body, "Dashboard", { user, current: "/dashboard" });
+	return html(body, "Dashboard", {
+		user,
+		current: "/dashboard",
+		currentProject,
+		projects: allProjects.results,
+	});
 }
 
 // ============================================================
@@ -571,9 +723,17 @@ export async function renderDashboardPage(
  * show username + avatar + login provider.
  */
 export async function renderSettingsPage(
-	env: Env,
+	c: any,
 	user: { id: string; username: string; avatar_url: string | null } | null,
 ): Promise<Response> {
+	const env = c.env;
+	const { getCurrentProject } = await import("./state");
+	const currentProject = await getCurrentProject(c);
+	const projects = user ? await env.void_db
+		.prepare("SELECT id, name, slug FROM projects WHERE user_id = ? ORDER BY created_at DESC")
+		.bind(user.id)
+		.all<{ id: string; name: string; slug: string }>() : { results: [] };
+
 	// Look up full user record for accurate info
 	const fullUser = user
 		? await env.void_db
@@ -583,6 +743,11 @@ export async function renderSettingsPage(
 				.bind(user.id)
 				.first<{ id: string; username: string; avatar_url: string | null; github_id: string; created_at: number }>()
 		: null;
+
+	// Per-user provider credentials
+	const { listProviderCredentials } = await import("./credentials");
+	const creds = user ? await listProviderCredentials(env, user.id) : [];
+	const hetznerCred = creds.find((c) => c.provider === "hetzner");
 
 	const body = `
 <h1>Settings</h1>
@@ -610,12 +775,22 @@ export async function renderSettingsPage(
 	<div class="settings-row" style="align-items:flex-start;padding:20px 0">
 		<div class="label">
 			<strong>Hetzner Cloud</strong>
-			<small>VM provisioning API. void reads <code>HETZNER_TOKEN</code> from the Worker env — set it once with <code style="color:#6cf">wrangler secret put HETZNER_TOKEN</code> and all server creates in this deployment will use it.</small>
+			<small>Your personal API token for provisioning VMs in your Hetzner Cloud project. Encrypted at rest with AES-256-GCM.</small>
 		</div>
 		<div class="value" style="text-align:right">
-			${env.HETZNER_TOKEN
-				? `<span class="meta" style="color:#0f0">✓ HETZNER_TOKEN is configured</span>`
-				: `<span class="meta" style="color:#f90">⚠ HETZNER_TOKEN not set</span>`}
+			${
+				hetznerCred
+					? `<span class="meta">✓ Token saved ${timeAgo(hetznerCred.created_at)}</span>
+					<form method="POST" action="/settings/hetzner/delete" style="margin-top:8px" onsubmit="return confirm('Delete Hetzner API token? New server creates will fall back to env HETZNER_TOKEN if set, otherwise use stub mode.')">
+						<button type="submit" class="btn btn-secondary" style="padding:6px 12px;font-size:0.85rem">Delete token</button>
+					</form>`
+					: `<form method="POST" action="/settings/hetzner" style="display:flex;gap:8px">
+							<input type="password" name="token" placeholder="hcloud_xxxxxxxxxxxxxxxx" required style="flex:1;padding:8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-family:ui-monospace,monospace;font-size:0.85rem">
+							<button type="submit" class="btn btn-primary" style="padding:8px 14px">Save</button>
+						</form>
+						<small style="display:block;margin-top:6px;color:#666">Get a token at <a href="https://console.hetzner.cloud" target="_blank" rel="noopener" style="color:#6cf">console.hetzner.cloud</a> → Security → API Tokens</small>
+						${env.HETZNER_TOKEN ? `<small style="display:block;margin-top:8px;color:#666">Tip: env HETZNER_TOKEN is also set as a fallback for this deployment.</small>` : ""}`
+			}
 		</div>
 	</div>
 </div>
@@ -644,5 +819,10 @@ export async function renderSettingsPage(
 </div>
 `;
 
-	return html(body, "Settings", { user, current: "/settings" });
+	return html(body, "Settings", {
+		user,
+		current: "/settings",
+		currentProject,
+		projects: projects.results,
+	});
 }

@@ -22,6 +22,7 @@ import {
 	deleteServer as hetznerDeleteServer,
 } from "./hetzner";
 import { validateRef, validateRepoUrl, validateShellCommand } from "./security";
+import { getProviderToken } from "./credentials";
 import { encrypt, decrypt } from "./crypto";
 
 interface JsonRpcRequest {
@@ -198,8 +199,15 @@ export async function handleMcp(c: any): Promise<Response> {
 					const serverId = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 					const now = Math.floor(Date.now() / 1000);
 
-					// Stub mode: no provider, or env HETZNER_TOKEN not set
-					if (provider === "stub" || !env.HETZNER_TOKEN) {
+					// Per-user Hetzner token (preferred) → fallback to env
+					let hetznerToken: string | null = null;
+					if (provider === "hetzner") {
+						const u = c.get?.("user");
+						if (u?.id) hetznerToken = await getProviderToken(env, u.id, "hetzner");
+					}
+
+					// Stub mode: no provider, or no token available
+					if (provider === "stub" || !hetznerToken) {
 						await env.void_db
 							.prepare(
 								`INSERT INTO servers (id, name, provider, region, size, status, created_at)
@@ -267,7 +275,7 @@ export async function handleMcp(c: any): Promise<Response> {
 					});
 
 					try {
-						const hs = await hetznerCreateServer(env.HETZNER_TOKEN, {
+						const hs = await hetznerCreateServer(hetznerToken as string, {
 							name: `void-${serverId.slice(0, 12)}`,
 							server_type: size,
 							image,

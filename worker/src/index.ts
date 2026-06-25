@@ -298,30 +298,65 @@ app.get("/api/servers", async (c) => {
 // ============================================================
 
 app.get("/dashboard", requireSession, async (c) => {
-	return renderDashboardPage(c.env, c.get("user"));
+	return renderDashboardPage(c, c.get("user"));
 });
 
 app.get("/servers", requireSession, async (c) => {
-	return renderServersPage(c.env, c.get("user"));
+	return renderServersPage(c, c.get("user"));
 });
 
 app.get("/projects", requireSession, async (c) => {
-	return renderProjectsPage(c.env, c.get("user"));
+	return renderProjectsPage(c, c.get("user"));
 });
 
 app.get("/deployments", requireSession, async (c) => {
 	const projectFilter = c.req.query("project") ?? null;
 	const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
 	const perPage = Math.min(100, Math.max(1, parseInt(c.req.query("per_page") || "20", 10) || 20));
-	return renderDeploymentsPage(c.env, c.get("user"), projectFilter, page, perPage);
+	return renderDeploymentsPage(c, c.get("user"), projectFilter, page, perPage);
 });
 
 app.get("/deployments/:id", requireSession, async (c) => {
-	return renderDeploymentLogsPage(c.env, c.get("user"), c.req.param("id"));
+	return renderDeploymentLogsPage(c, c.get("user"), c.req.param("id"));
 });
 
 app.get("/settings", requireSession, async (c) => {
-	return renderSettingsPage(c.env, c.get("user"));
+	return renderSettingsPage(c, c.get("user"));
+});
+
+// Project switcher — sets the current_project_id cookie based on dropdown selection.
+// Empty value clears the cookie (returns to "All projects" view).
+app.post("/projects/select", requireSession, async (c) => {
+	const { setCurrentProject } = await import("./state");
+	const form = await c.req.parseBody();
+	const projectId = String((form as Record<string, string>)["project_id"] || "").trim();
+	const result = await setCurrentProject(c, projectId);
+	if (!result.ok) return c.text("project not found or access denied", 403);
+	// Redirect back to the page that triggered the switch (referer) or dashboard
+	const referer = c.req.header("referer");
+	if (referer && new URL(referer).origin === new URL(c.req.url).origin) {
+		return c.redirect(referer);
+	}
+	return c.redirect("/dashboard");
+});
+
+// Provider credential management (HTML form posts, requires session)
+app.post("/settings/hetzner", requireSession, async (c) => {
+	const { setProviderToken } = await import("./credentials");
+	const form = await c.req.parseBody();
+	const token = (form as Record<string, string>)["token"]?.trim();
+	if (!token) return c.text("missing token", 400);
+	if (!/^hcloud_[A-Za-z0-9_-]{20,}$/.test(token)) {
+		return c.text("invalid Hetzner token format (expected hcloud_...)", 400);
+	}
+	await setProviderToken(c.env, c.get("user").id, "hetzner", token);
+	return c.redirect("/settings");
+});
+
+app.post("/settings/hetzner/delete", requireSession, async (c) => {
+	const { deleteProviderToken } = await import("./credentials");
+	await deleteProviderToken(c.env, c.get("user").id, "hetzner");
+	return c.redirect("/settings");
 });
 
 // UI form action: rotate session token (POST from the rotate button)
