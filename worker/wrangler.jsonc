@@ -52,5 +52,9 @@
 			"tag": "v1",
 			"new_sqlite_classes": ["VoidCell"]
 		}
-	]
+	],
+
+	"vars": {
+		"GITHUB_WEBHOOK_SECRET": "REPLACE_WITH_REAL_SECRET_VIA_WRANGLER_SECRET_PUT"
+	}
 }

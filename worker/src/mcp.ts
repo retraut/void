@@ -105,6 +105,25 @@ const TOOLS = [
 			required: ["server_id"],
 		},
 	},
+	{
+		name: "void_register_project",
+		description:
+			"Register a project for git push auto-deploy. Once registered, configure a GitHub webhook on the repo pointing to POST /api/webhooks/github with a secret matching GITHUB_WEBHOOK_SECRET. Pushes to the default branch → production deploy; PRs → preview URL.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				server_id: { type: "string", description: "Server to deploy to" },
+				slug: { type: "string", description: "URL-safe project slug, e.g. 'my-app'" },
+				name: { type: "string", description: "Display name" },
+				repo_url: { type: "string", description: "Git URL, e.g. 'https://github.com/owner/repo'" },
+				default_branch: { type: "string", description: "Default branch (main/master)", default: "main" },
+				default_port: { type: "integer", description: "Port the serve_command listens on", default: 3000 },
+				build_command: { type: "string", description: "Build command (optional)" },
+				serve_command: { type: "string", description: "Serve command (optional)" },
+			},
+			required: ["server_id", "slug", "name", "repo_url"],
+		},
+	},
 ];
 
 function rpc(id: JsonRpcRequest["id"], result: any): JsonRpcResponse {
@@ -469,6 +488,70 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 					return Response.json(
 						rpc(id, {
 							content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
+						})
+					);
+				}
+
+				case "void_register_project": {
+					const slug = (args.slug as string).toLowerCase().replace(/[^a-z0-9-]/g, "-");
+					const projectId = `proj_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+
+					// verify server exists
+					const serverCheck = await env.void_db
+						.prepare("SELECT id FROM servers WHERE id = ?")
+						.bind(args.server_id)
+						.first();
+					if (!serverCheck) {
+						return Response.json(rpcErr(id, -32004, `Server ${args.server_id} not found`));
+					}
+
+					try {
+						await env.void_db
+							.prepare(
+								`INSERT INTO projects (id, server_id, slug, name, repo_url, default_branch, default_port, build_command, serve_command)
+								 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+							)
+							.bind(
+								projectId,
+								args.server_id,
+								slug,
+								args.name,
+								args.repo_url,
+								args.default_branch || "main",
+								(args.default_port as number) || 3000,
+								(args.build_command as string) || null,
+								(args.serve_command as string) || null,
+							)
+							.run();
+					} catch (e: any) {
+						if (String(e?.message || e).includes("UNIQUE")) {
+							return Response.json(
+								rpcErr(id, -32008, `Project with slug '${slug}' already exists for this user`),
+							);
+						}
+						throw e;
+					}
+
+					return Response.json(
+						rpc(id, {
+							content: [
+								{
+									type: "text",
+									text: JSON.stringify(
+										{
+											project_id: projectId,
+											slug,
+											name: args.name,
+											repo_url: args.repo_url,
+											server_id: args.server_id,
+											default_branch: args.default_branch || "main",
+											next_step: `Configure a GitHub webhook on ${args.repo_url}: URL=https://api.void.example.com/api/webhooks/github, content-type=application/json, secret=<your GITHUB_WEBHOOK_SECRET>, events=[push, pull_request]`,
+										},
+										null,
+										2,
+									),
+								},
+							],
 						})
 					);
 				}

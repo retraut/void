@@ -6,6 +6,7 @@ import { Env } from "./env";
 import { ensureSchema } from "./db";
 import { VoidCell } from "./void-cell";
 import { handleMcp } from "./mcp";
+import { handleGitHubWebhook } from "./webhook";
 
 export { VoidCell };
 
@@ -83,6 +84,10 @@ export default {
 					r2: !!env.void_builds,
 					do: !!env.void_cell,
 				},
+				features: {
+					github_webhook: !!env.GITHUB_WEBHOOK_SECRET,
+					cf_tunnel: !!env.CF_API_TOKEN,
+				},
 			});
 		}
 
@@ -96,8 +101,14 @@ export default {
 					"GET /api/servers",
 					"POST /api/servers (create stub)",
 					"GET /api/cell/:server_id/status",
+					"POST /api/webhooks/github (git push → auto-deploy)",
 				],
 			});
+		}
+
+		// GitHub webhook
+		if (path === "/api/webhooks/github" && request.method === "POST") {
+			return handleGitHubWebhook(request, env);
 		}
 
 		// Direct REST wrappers around MCP tools (for curl / scripts)
