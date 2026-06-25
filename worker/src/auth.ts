@@ -96,6 +96,19 @@ export async function getSessionUser(env: Env, request: Request): Promise<{ id: 
 	return user;
 }
 
+/**
+ * Only allow returnTo paths that are same-origin relative paths (start with
+ * a single "/", no "//", no scheme). Prevents open-redirect attacks via
+ * the OAuth flow.
+ */
+function safeReturnTo(raw: string | null): string {
+	if (!raw) return "/";
+	if (!raw.startsWith("/")) return "/";
+	if (raw.startsWith("//")) return "/";
+	if (raw.includes("\n") || raw.includes("\r")) return "/";
+	return raw;
+}
+
 export async function handleAuthStart(request: Request, env: Env): Promise<Response> {
 	if (!env.GITHUB_CLIENT_ID) {
 		return new Response("GITHUB_CLIENT_ID not configured", { status: 503 });
@@ -103,8 +116,13 @@ export async function handleAuthStart(request: Request, env: Env): Promise<Respo
 	const url = new URL(request.url);
 	const redirectUri = `${url.origin}/api/auth/callback`;
 	const state = crypto.randomUUID();
-	// Stash state in KV for CSRF check
-	await env.ROUTES.put(`oauth_state:${state}`, "1", { expirationTtl: 600 });
+	const returnTo = safeReturnTo(url.searchParams.get("returnTo"));
+
+	// Stash state + returnTo in KV. Value is JSON so we can extend later
+	// (e.g. tenant selection) without breaking existing state tokens.
+	await env.ROUTES.put(`oauth_state:${state}`, JSON.stringify({ returnTo }), {
+		expirationTtl: 600,
+	});
 
 	const authorizeUrl = new URL(GITHUB_AUTHORIZE_URL);
 	authorizeUrl.searchParams.set("client_id", env.GITHUB_CLIENT_ID);
@@ -132,12 +150,21 @@ export async function handleAuthCallback(request: Request, env: Env): Promise<Re
 		return new Response("missing code or state", { status: 400 });
 	}
 
-	// CSRF check
+	// CSRF check (also retrieve returnTo we stashed at /api/auth/github)
 	const stored = await env.ROUTES.get(`oauth_state:${state}`);
 	if (!stored) {
 		return new Response("invalid state", { status: 400 });
 	}
-	await env.ROUTES.delete(`oauth_state:${state}`);
+	let returnTo = "/";
+	try {
+		const parsed = JSON.parse(stored);
+		if (parsed && typeof parsed.returnTo === "string") {
+			returnTo = safeReturnTo(parsed.returnTo);
+		}
+	} catch {
+		// legacy state values were just "1" — treat as no returnTo
+	}
+	await env.ROUTES.delete(`oauth_state:${state}`); // single-use
 
 	// Exchange code for access token
 	const tokenResp = await fetch(GITHUB_TOKEN_URL, {
@@ -199,12 +226,12 @@ export async function handleAuthCallback(request: Request, env: Env): Promise<Re
 		{ expirationTtl: SESSION_TTL_SECONDS },
 	);
 
-	// Set cookie and redirect
+	// Set cookie and redirect back to the page that started the OAuth flow.
 	const cookie = `void_session=${sessionId}; Path=/; Max-Age=${SESSION_TTL_SECONDS}; HttpOnly; Secure; SameSite=Lax`;
 	return new Response(null, {
 		status: 302,
 		headers: {
-			Location: `${url.origin}/`,
+			Location: `${url.origin}${returnTo}`,
 			"Set-Cookie": cookie,
 		},
 	});

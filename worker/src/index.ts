@@ -119,10 +119,13 @@ app.use("/api/*", async (c, next) => {
 const requireSession = async (c: any, next: any) => {
 	const user = await getSessionUser(c.env, c.req.raw);
 	if (!user) {
-		// Browser visit: redirect to OAuth start. Programmatic: 401.
+		// Browser visit: redirect to OAuth start, carrying returnTo so the
+		// callback can land back on this page. Programmatic: 401.
 		const accept = c.req.header("Accept") || "";
 		if (accept.includes("text/html")) {
-			return c.redirect("/api/auth/github");
+			const returnTo = c.req.path + (c.req.queryString ? `?${c.req.queryString}` : "");
+			const url = `/api/auth/github?returnTo=${encodeURIComponent(returnTo)}`;
+			return c.redirect(url);
 		}
 		return c.json({ error: "unauthorized", message: "session required" }, 401);
 	}
