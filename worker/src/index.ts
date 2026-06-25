@@ -117,7 +117,7 @@ app.use("/api/*", async (c, next) => {
 // ============================================================
 
 const requireSession = async (c: any, next: any) => {
-	const user = await getSessionUser(c.env, c.req.raw);
+	const user = await getSessionUser(c);
 	if (!user) {
 		// Browser visit: redirect to OAuth start, carrying returnTo so the
 		// callback can land back on this page. Programmatic: 401.
@@ -184,7 +184,7 @@ app.all("/api/cell/:serverId", async (c) => forwardToCell(c, c.req.param("server
 // ============================================================
 
 app.get("/", async (c) => {
-	const user = await getSessionUser(c.env, c.req.raw);
+	const user = await getSessionUser(c);
 	const env = c.env;
 	const html = renderLandingHtml({
 		user,
@@ -264,10 +264,10 @@ app.post("/mcp", bearerOnly, async (c) => {
 // Auth (session cookie, NOT bearer)
 // ============================================================
 
-app.get("/api/auth/github", (c) => handleAuthStart(c.req.raw, c.env));
-app.get("/api/auth/callback", (c) => handleAuthCallback(c.req.raw, c.env));
-app.get("/api/auth/me", (c) => handleAuthMe(c.req.raw, c.env));
-app.get("/api/auth/logout", (c) => handleAuthLogout(c.req.raw, c.env));
+app.get("/api/auth/github", (c) => handleAuthStart(c));
+app.get("/api/auth/callback", (c) => handleAuthCallback(c));
+app.get("/api/auth/me", (c) => handleAuthMe(c));
+app.get("/api/auth/logout", (c) => handleAuthLogout(c));
 
 // ============================================================
 // Webhooks (HMAC, NOT bearer)

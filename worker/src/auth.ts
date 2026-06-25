@@ -7,15 +7,35 @@
  *   3. GET  /api/auth/me          → return current user JSON
  *   4. POST /api/auth/logout      → clear session
  *
- * Sessions are stored in KV with 30-day TTL. Cookie is HttpOnly, Secure, SameSite=Lax.
+ * Sessions are stored in KV with 30-day TTL. Cookie uses Hono's helper
+ * for set/get/delete — battle-tested against subtle hand-rolled bugs.
+ * __Host- prefix enforces: secure + path=/ + no domain (RFC 6265bis-13).
  */
 
+import type { Context } from "hono";
+import { setCookie, getCookie, deleteCookie } from "hono/cookie";
 import { Env } from "./env";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_USER_URL = "https://api.github.com/user";
+
+/**
+ * Session cookie options. Used for both setCookie and deleteCookie so
+ * the delete matches the set exactly (path, secure, etc.) — required
+ * for the browser to actually remove it.
+ */
+const SESSION_COOKIE_OPTS = {
+	path: "/",
+	secure: true,
+	httpOnly: true,
+	sameSite: "Lax" as const,
+	maxAge: SESSION_TTL_SECONDS,
+};
+// Cookie name uses __Host- prefix: browser enforces path=/, secure,
+// no Domain. Prevents subdomain cookie injection.
+const SESSION_COOKIE_NAME = "__Host-void_session";
 
 /**
  * Verify Bearer token on /api/* and /mcp. Returns null if authorized,
@@ -81,18 +101,17 @@ interface GithubTokenResponse {
 	error_description?: string;
 }
 
-export async function getSessionUser(env: Env, request: Request): Promise<{ id: string; username: string; avatar_url: string | null } | null> {
-	const cookie = request.headers.get("Cookie") || "";
-	const match = cookie.match(/(?:^|;\s*)void_session=([a-f0-9-]{36})/);
-	if (!match) return null;
-	const sessionId = match[1];
+export async function getSessionUser(c: Context): Promise<{ id: string; username: string; avatar_url: string | null } | null> {
+	const env = c.env;
+	const sessionId = getCookie(c, SESSION_COOKIE_NAME);
+	if (!sessionId) return null;
 	const session = await env.ROUTES.get(`session:${sessionId}`, "json") as { user_id: string; username: string; avatar_url: string | null } | null;
 	if (!session) return null;
 	// Confirm user still exists in D1
-	const user = await env.void_db
+	const user = (await env.void_db
 		.prepare("SELECT id, username, avatar_url FROM users WHERE id = ?")
 		.bind(session.user_id)
-		.first<{ id: string; username: string; avatar_url: string | null }>();
+		.first()) as { id: string; username: string; avatar_url: string | null } | null;
 	return user;
 }
 
@@ -109,11 +128,12 @@ function safeReturnTo(raw: string | null): string {
 	return raw;
 }
 
-export async function handleAuthStart(request: Request, env: Env): Promise<Response> {
+export async function handleAuthStart(c: Context): Promise<Response> {
+	const env = c.env;
 	if (!env.GITHUB_CLIENT_ID) {
-		return new Response("GITHUB_CLIENT_ID not configured", { status: 503 });
+		return c.text("GITHUB_CLIENT_ID not configured", 503);
 	}
-	const url = new URL(request.url);
+	const url = new URL(c.req.url);
 	const redirectUri = `${url.origin}/api/auth/callback`;
 	const state = crypto.randomUUID();
 	const returnTo = safeReturnTo(url.searchParams.get("returnTo"));
@@ -131,29 +151,30 @@ export async function handleAuthStart(request: Request, env: Env): Promise<Respo
 	authorizeUrl.searchParams.set("state", state);
 	authorizeUrl.searchParams.set("allow_signup", "true");
 
-	return Response.redirect(authorizeUrl.toString(), 302);
+	return c.redirect(authorizeUrl.toString(), 302);
 }
 
-export async function handleAuthCallback(request: Request, env: Env): Promise<Response> {
+export async function handleAuthCallback(c: Context): Promise<Response> {
+	const env = c.env;
 	if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
-		return new Response("GitHub OAuth not configured", { status: 503 });
+		return c.text("GitHub OAuth not configured", 503);
 	}
-	const url = new URL(request.url);
+	const url = new URL(c.req.url);
 	const code = url.searchParams.get("code");
 	const state = url.searchParams.get("state");
 	const error = url.searchParams.get("error");
 
 	if (error) {
-		return Response.redirect(`${url.origin}/?error=${encodeURIComponent(error)}`, 302);
+		return c.redirect(`${url.origin}/?error=${encodeURIComponent(error)}`, 302);
 	}
 	if (!code || !state) {
-		return new Response("missing code or state", { status: 400 });
+		return c.text("missing code or state", 400);
 	}
 
 	// CSRF check (also retrieve returnTo we stashed at /api/auth/github)
 	const stored = await env.ROUTES.get(`oauth_state:${state}`);
 	if (!stored) {
-		return new Response("invalid state", { status: 400 });
+		return c.text("invalid state", 400);
 	}
 	let returnTo = "/";
 	try {
@@ -182,7 +203,7 @@ export async function handleAuthCallback(request: Request, env: Env): Promise<Re
 	});
 	const tokenData = (await tokenResp.json()) as GithubTokenResponse;
 	if (tokenData.error) {
-		return new Response(`OAuth error: ${tokenData.error_description || tokenData.error}`, { status: 400 });
+		return c.text(`OAuth error: ${tokenData.error_description || tokenData.error}`, 400);
 	}
 
 	// Fetch user info
@@ -226,51 +247,33 @@ export async function handleAuthCallback(request: Request, env: Env): Promise<Re
 		{ expirationTtl: SESSION_TTL_SECONDS },
 	);
 
-	// Set cookie and redirect back to the page that started the OAuth flow.
-	const cookie = `void_session=${sessionId}; Path=/; Max-Age=${SESSION_TTL_SECONDS}; HttpOnly; Secure; SameSite=Lax`;
-	return new Response(null, {
-		status: 302,
-		headers: {
-			Location: `${url.origin}${returnTo}`,
-			"Set-Cookie": cookie,
-		},
-	});
+	// Set cookie via Hono helper. Same SESSION_COOKIE_OPTS as deleteCookie
+	// so the attributes match exactly.
+	setCookie(c, SESSION_COOKIE_NAME, sessionId, SESSION_COOKIE_OPTS);
+	return c.redirect(`${url.origin}${returnTo}`, 302);
 }
 
-export async function handleAuthMe(request: Request, env: Env): Promise<Response> {
-	const user = await getSessionUser(env, request);
+export async function handleAuthMe(c: Context): Promise<Response> {
+	const user = await getSessionUser(c);
 	if (!user) {
-		return new Response(JSON.stringify({ authenticated: false }), {
-			status: 200,
-			headers: { "content-type": "application/json" },
-		});
+		return c.json({ authenticated: false });
 	}
-	return new Response(JSON.stringify({ authenticated: true, user }), {
-		status: 200,
-		headers: { "content-type": "application/json" },
-	});
+	return c.json({ authenticated: true, user });
 }
 
-export async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
-	const cookie = request.headers.get("Cookie") || "";
-	const match = cookie.match(/(?:^|;\s*)void_session=([a-f0-9-]{36})/);
-	if (match) {
-		await env.ROUTES.delete(`session:${match[1]}`);
+export async function handleAuthLogout(c: Context): Promise<Response> {
+	const env = c.env;
+	const sessionId = getCookie(c, SESSION_COOKIE_NAME);
+	if (sessionId) {
+		await env.ROUTES.delete(`session:${sessionId}`);
 	}
-	const url = new URL(request.url);
-	// Aggressive cookie clearing: both Max-Age=0 AND Expires in the past,
-	// plus Cache-Control: no-store to prevent any caching layer from
-	// re-serving a stale authenticated page after logout.
-	return new Response(null, {
-		status: 302,
-		headers: {
-			Location: `${url.origin}/`,
-			"Set-Cookie":
-				"void_session=deleted; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
-			"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-			Pragma: "no-cache",
-		},
-	});
+	// Hono's deleteCookie constructs an Expires=Thu, 01 Jan 1970 + Max-Age=0
+	// Set-Cookie with the same attributes (path, secure, etc.) as setCookie.
+	// This is the RFC-compliant way to delete a cookie — attributes must match.
+	deleteCookie(c, SESSION_COOKIE_NAME, SESSION_COOKIE_OPTS);
+	c.header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+	c.header("Pragma", "no-cache");
+	return c.redirect("/", 302);
 }
 
 /**
