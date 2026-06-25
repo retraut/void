@@ -350,8 +350,8 @@ app.post("/settings/hetzner", requireSession, async (c) => {
 	const form = await c.req.parseBody();
 	const token = (form as Record<string, string>)["token"]?.trim();
 	if (!token) return c.redirect("/settings?toast=error&msg=missing+token");
-	if (!/^hcloud_[A-Za-z0-9_-]{20,}$/.test(token)) {
-		return c.redirect("/settings?toast=error&msg=invalid+Hetzner+token+format+%28expected+hcloud_...%29");
+	if (!/^[A-Za-z0-9_=+-]{30,}$/.test(token)) {
+		return c.redirect("/settings?toast=error&msg=invalid+token+format+%28too+short+or+has+weird+chars%29");
 	}
 	// Live API verification — token must actually work, not just look right.
 	const verify = await verifyHetznerToken(token);
@@ -374,8 +374,8 @@ app.post("/settings/hetzner/test", requireSession, async (c) => {
 	const form = await c.req.parseBody();
 	const token = (form as Record<string, string>)["token"]?.trim() || "";
 	if (!token) return c.json({ ok: false, reason: "missing token" }, 400);
-	if (!/^hcloud_[A-Za-z0-9_-]{20,}$/.test(token)) {
-		return c.json({ ok: false, reason: "invalid format (expected hcloud_...)" }, 400);
+	if (!/^[A-Za-z0-9_=+-]{30,}$/.test(token)) {
+		return c.json({ ok: false, reason: "invalid format (too short or has weird chars)" }, 400);
 	}
 	const verify = await verifyHetznerToken(token);
 	if (!verify.ok) {

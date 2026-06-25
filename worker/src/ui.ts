@@ -828,7 +828,11 @@ ${toast}
 							var check = document.getElementById('hetzner-check');
 							var error = document.getElementById('hetzner-error');
 							var form = document.getElementById('hetzner-form');
-							var pattern = /^hcloud_[A-Za-z0-9_-]{20,}$/;
+							// Hetzner issues both hcloud_ (Cloud API) and app_ (newer Application
+							// tokens). Don't hardcode a prefix — just check it's long enough
+							// and contains only token-safe characters. The real verification
+							// happens server-side via the Hetzner API on Test/Save.
+							var pattern = /^[A-Za-z0-9_=+-]{30,}$/;
 							function validate(){
 								var v = input.value.trim();
 								if(!v){submit.disabled=true;testBtn.disabled=true;check.style.display='none';input.style.borderColor='#333';error.textContent='';return}
@@ -838,9 +842,8 @@ ${toast}
 								} else {
 									submit.disabled=true;testBtn.disabled=true;
 									input.style.borderColor='#6b1f1f';
-									if(v.length<27) error.textContent='Token too short (expected hcloud_ + 20+ chars)';
-									else if(!v.startsWith('hcloud_')) error.textContent='Must start with hcloud_';
-									else error.textContent='Invalid characters in token';
+									if(v.length<30) error.textContent='Token too short';
+									else error.textContent='Invalid characters in token (only letters, digits, _, =, +, -)';
 								}
 							}
 							input.addEventListener('input', validate);
