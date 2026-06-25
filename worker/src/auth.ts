@@ -250,14 +250,6 @@ export function renderLandingHtml(opts: {
 	cf_tunnel: boolean;
 	github_webhook: boolean;
 }): string {
-	const userBlock = opts.user
-		? `<div class="user">
-        <img src="${opts.user.avatar_url || ""}" alt="" width="32" height="32">
-        <span>@${escapeHtml(opts.user.username)}</span>
-        <a href="/api/auth/logout" class="link-mute">logout</a>
-      </div>`
-		: `<a href="/api/auth/github" class="btn btn-primary">Sign in with GitHub</a>`;
-
 	const featureList = [
 		{ name: "GitHub OAuth", on: opts.installed, missing: "GITHUB_CLIENT_ID/SECRET" },
 		{ name: "GitHub webhook", on: opts.github_webhook, missing: "GITHUB_WEBHOOK_SECRET" },
@@ -268,6 +260,15 @@ export function renderLandingHtml(opts: {
 			`<li><span class="dot ${f.on ? "on" : "off"}"></span>${f.name} <code>${escapeHtml(f.missing)}</code></li>`,
 	).join("");
 
+	// Octocat (GitHub Mark) — single inline SVG, white on dark.
+	// viewBox 16x16 scales cleanly to any size.
+	const octocat = `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>`;
+
+	const topRight = `<div class="top-right">
+		<a href="https://github.com/void-sh/void" class="gh-link" target="_blank" rel="noopener" title="View on GitHub">${octocat}</a>
+		${opts.user ? `<div class="user-mini"><img src="${escapeHtml(opts.user.avatar_url || "")}" alt="" width="20" height="20"><span>@${escapeHtml(opts.user.username)}</span><a href="/api/auth/logout" class="link-mute">logout</a></div>` : ""}
+	</div>`;
+
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -277,7 +278,13 @@ export function renderLandingHtml(opts: {
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-  .wrap{max-width:780px;width:100%}
+  .wrap{max-width:780px;width:100%;position:relative}
+  .top-right{position:absolute;top:0;right:0;display:flex;align-items:center;gap:12px}
+  .gh-link{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;color:#888;transition:color 0.15s}
+  .gh-link:hover{color:#fff}
+  .gh-link svg{width:22px;height:22px}
+  .user-mini{display:flex;align-items:center;gap:6px;font-size:0.85rem;color:#999}
+  .user-mini img{border-radius:50%}
   h1{font-size:4rem;font-weight:800;letter-spacing:-0.04em;line-height:1;margin-bottom:24px}
   h1 span{background:linear-gradient(120deg,#fff 0%,#666 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
   .sub{font-size:1.25rem;color:#999;margin-bottom:32px;line-height:1.5}
@@ -301,9 +308,7 @@ export function renderLandingHtml(opts: {
   .dot.on{background:#0f0;box-shadow:0 0 8px #0f0}
   .dot.off{background:#555}
   .features code{background:#1a1a1a;padding:1px 6px;border-radius:4px;color:#888;font-size:0.8rem;margin-left:auto;font-family:ui-monospace,monospace}
-  .user{display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:8px 12px;background:#0a0a0a;border-radius:8px;width:fit-content}
-  .user img{border-radius:50%}
-  .link-mute{color:#666;text-decoration:none;font-size:0.85rem;margin-left:8px}
+  .link-mute{color:#666;text-decoration:none;font-size:0.85rem;margin-left:6px}
   .link-mute:hover{color:#fff}
   .endpoints{background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:20px}
   .endpoints h3{font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:#888;margin-bottom:12px}
@@ -315,10 +320,9 @@ export function renderLandingHtml(opts: {
 </head>
 <body>
 <div class="wrap">
+  ${topRight}
   <h1>deployed <span>into the void</span></h1>
   <p class="sub">Self-hosted, edge-driven PaaS. Vercel DX, Hetzner bill, No SSH. Your AI deploys from Cursor.</p>
-
-  <div class="user">${userBlock}</div>
 
   <div class="actions">
     ${opts.user ? `
@@ -328,7 +332,6 @@ export function renderLandingHtml(opts: {
       <a href="/api/auth/github?action=new-server" class="btn btn-primary">+ New Server</a>
     ` : `
       <a href="/api/auth/github" class="btn btn-primary">Get started with GitHub</a>
-      <a href="https://github.com/void-sh/void" class="btn btn-secondary">View on GitHub</a>
     `}
   </div>
 
