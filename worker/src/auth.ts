@@ -250,7 +250,90 @@ export async function handleAuthCallback(c: Context): Promise<Response> {
 	// Set cookie via Hono helper. Same SESSION_COOKIE_OPTS as deleteCookie
 	// so the attributes match exactly.
 	setCookie(c, SESSION_COOKIE_NAME, sessionId, SESSION_COOKIE_OPTS);
-	return c.redirect(`${url.origin}${returnTo}`, 302);
+
+	// Show a brief "welcome" interstitial so the user can see the OAuth
+	// round-trip happened. Without this, /servers → OAuth → /servers looks
+	// like nothing happened (the user thought logout was broken because
+	// the silent re-auth felt like staying logged in).
+	return c.html(authInterstitial({
+		kind: "login",
+		username: ghUser.login,
+		avatarUrl: ghUser.avatar_url,
+		redirectTo: `${url.origin}${returnTo}`,
+		delayMs: 1000,
+	}));
+}
+
+/**
+ * Brief interstitial page shown between OAuth completion and the final
+ * redirect. Solves two UX problems:
+ *
+ * 1. Login: the OAuth round-trip (browser → GitHub → callback → app) is
+ *    instant if the user is already logged into GitHub. Looks like
+ *    "nothing happened" — the user thought logout was broken because
+ *    the silent re-auth felt like staying logged in.
+ *
+ * 2. Logout: the immediate 302 to / leaves no time to see the logout
+ *    was successful. With this page, the user sees a "Logged out"
+ *    confirmation before being redirected.
+ *
+ * Page is server-rendered, no JS framework, ~50 lines. Auto-redirects
+ * after `delayMs` via inline setTimeout. Spinner is pure CSS.
+ */
+function authInterstitial(opts: {
+	kind: "login" | "logout";
+	username?: string;
+	avatarUrl?: string | null;
+	redirectTo: string;
+	delayMs: number;
+}): string {
+	const title = opts.kind === "login" ? `Welcome back, @${opts.username}` : "Logged out";
+	const subtitle =
+		opts.kind === "login"
+			? "Signed in via GitHub. Redirecting…"
+			: "Session cleared. Redirecting to home…";
+	const avatar =
+		opts.avatarUrl && opts.kind === "login"
+			? `<img class="avatar" src="${opts.avatarUrl}" alt="">`
+			: `<div class="avatar avatar-empty">✓</div>`;
+
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>${escapeHtml(title)} · void</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .card{background:#0a0a0a;border:1px solid #222;border-radius:16px;padding:40px 48px;text-align:center;max-width:380px;width:100%;animation:pop 240ms cubic-bezier(.34,1.56,.64,1) both}
+  @keyframes pop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+  .avatar{width:64px;height:64px;border-radius:50%;margin:0 auto 20px;display:block;animation:pop 320ms cubic-bezier(.34,1.56,.64,1) .05s both}
+  .avatar-empty{background:#0a3320;color:#0f0;font-size:32px;line-height:64px;font-weight:600}
+  h1{font-size:1.35rem;font-weight:700;margin-bottom:8px;letter-spacing:-0.01em}
+  p{color:#888;font-size:0.9rem;margin-bottom:24px}
+  .progress{height:3px;background:#1a1a1a;border-radius:2px;overflow:hidden;margin-bottom:8px}
+  .progress-bar{height:100%;background:linear-gradient(90deg,#fff,#888);width:0;animation:fill ${opts.delayMs}ms linear forwards}
+  @keyframes fill{from{width:0}to{width:100%}}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #333;border-top-color:#fff;border-radius:50%;animation:spin 700ms linear infinite;vertical-align:middle;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .skip{color:#666;font-size:0.8rem;text-decoration:underline;margin-top:8px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="card">
+  ${avatar}
+  <h1>${escapeHtml(title)}</h1>
+  <p>${escapeHtml(subtitle)}</p>
+  <div class="progress"><div class="progress-bar"></div></div>
+  <p><span class="spinner"></span>redirecting…</p>
+  <a class="skip" href="${escapeHtml(opts.redirectTo)}">skip →</a>
+</div>
+<script>
+  setTimeout(function(){ window.location.href = ${JSON.stringify(opts.redirectTo)}; }, ${opts.delayMs});
+</script>
+</body>
+</html>`;
 }
 
 export async function handleAuthMe(c: Context): Promise<Response> {
@@ -273,7 +356,15 @@ export async function handleAuthLogout(c: Context): Promise<Response> {
 	deleteCookie(c, SESSION_COOKIE_NAME, SESSION_COOKIE_OPTS);
 	c.header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 	c.header("Pragma", "no-cache");
-	return c.redirect("/", 302);
+
+	// Show "Logged out" interstitial so the user sees the logout was
+	// successful. Without this, the immediate redirect to / makes it
+	// look like nothing happened.
+	return c.html(authInterstitial({
+		kind: "logout",
+		redirectTo: new URL("/", c.req.url).toString(),
+		delayMs: 600,
+	}));
 }
 
 /**
