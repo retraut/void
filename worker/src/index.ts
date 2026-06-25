@@ -18,8 +18,10 @@ function json(data: unknown, status = 200): Response {
 
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-		// Run schema migrations (idempotent, no-op after first run)
-		ctx.waitUntil(ensureSchema(env.void_db));
+		// Run schema migrations synchronously on first call (idempotent after).
+		// Doing this inline (not via waitUntil) ensures the migration has
+		// completed before we try to query the new columns.
+		await ensureSchema(env.void_db);
 
 		const url = new URL(request.url);
 		const path = url.pathname;

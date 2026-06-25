@@ -70,6 +70,20 @@ CREATE INDEX IF NOT EXISTS idx_servers_user ON servers(user_id);
 CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
 `;
 
+// Idempotent column additions (for migrating existing tables created by an older schema).
+// SQLite doesn't support IF NOT EXISTS on ALTER TABLE ADD COLUMN, so we catch the error.
+const COLUMN_MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
+	{ table: "servers", column: "tunnel_id", type: "TEXT" },
+	{ table: "servers", column: "tunnel_name", type: "TEXT" },
+	{ table: "servers", column: "tunnel_token", type: "TEXT" },
+	{ table: "projects", column: "build_command", type: "TEXT" },
+	{ table: "projects", column: "serve_command", type: "TEXT" },
+	{ table: "deployments", column: "hostname", type: "TEXT" },
+	{ table: "deployments", column: "public_url", type: "TEXT" },
+	{ table: "deployments", column: "dns_record_id", type: "TEXT" },
+	{ table: "deployments", column: "port", type: "INTEGER" },
+];
+
 let migrated = false;
 
 export async function ensureSchema(db: D1Database): Promise<void> {
@@ -77,6 +91,17 @@ export async function ensureSchema(db: D1Database): Promise<void> {
 	const statements = SCHEMA.split(";").map((s) => s.trim()).filter(Boolean);
 	for (const sql of statements) {
 		await db.prepare(sql).run();
+	}
+	for (const m of COLUMN_MIGRATIONS) {
+		try {
+			await db.prepare(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.type}`).run();
+		} catch (e: any) {
+			// "duplicate column name" is fine — means it already exists
+			if (!String(e?.message || e).includes("duplicate column")) {
+				// re-throw if it's a different error
+				throw e;
+			}
+		}
 	}
 	migrated = true;
 }
