@@ -258,11 +258,17 @@ export async function handleAuthLogout(request: Request, env: Env): Promise<Resp
 		await env.ROUTES.delete(`session:${match[1]}`);
 	}
 	const url = new URL(request.url);
+	// Aggressive cookie clearing: both Max-Age=0 AND Expires in the past,
+	// plus Cache-Control: no-store to prevent any caching layer from
+	// re-serving a stale authenticated page after logout.
 	return new Response(null, {
 		status: 302,
 		headers: {
 			Location: `${url.origin}/`,
-			"Set-Cookie": "void_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
+			"Set-Cookie":
+				"void_session=deleted; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; HttpOnly; Secure; SameSite=Lax",
+			"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+			Pragma: "no-cache",
 		},
 	});
 }
