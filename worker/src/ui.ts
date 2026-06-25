@@ -813,6 +813,7 @@ ${toast}
 								<input type="password" name="token" id="hetzner-token" placeholder="hcloud_xxxxxxxxxxxxxxxx" autocomplete="off" spellcheck="false" style="width:100%;padding:8px 32px 8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-family:ui-monospace,monospace;font-size:0.85rem;box-sizing:border-box">
 								<span id="hetzner-check" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:0.9rem;pointer-events:none;display:none"></span>
 							</div>
+							<button type="button" id="hetzner-test" class="btn btn-secondary" style="padding:8px 14px" disabled>Test</button>
 							<button type="submit" id="hetzner-submit" class="btn btn-primary" style="padding:8px 14px" disabled>Save</button>
 						</form>
 						<small id="hetzner-error" style="display:block;margin-top:6px;color:#f55;min-height:1em;font-size:0.8rem"></small>
@@ -822,18 +823,19 @@ ${toast}
 						(function(){
 							var input = document.getElementById('hetzner-token');
 							var submit = document.getElementById('hetzner-submit');
+							var testBtn = document.getElementById('hetzner-test');
 							var check = document.getElementById('hetzner-check');
 							var error = document.getElementById('hetzner-error');
 							var form = document.getElementById('hetzner-form');
 							var pattern = /^hcloud_[A-Za-z0-9_-]{20,}$/;
 							function validate(){
 								var v = input.value.trim();
-								if(!v){submit.disabled=true;check.style.display='none';input.style.borderColor='#333';error.textContent='';return}
+								if(!v){submit.disabled=true;testBtn.disabled=true;check.style.display='none';input.style.borderColor='#333';error.textContent='';return}
 								if(pattern.test(v)){
-									submit.disabled=false;check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
+									submit.disabled=false;testBtn.disabled=false;check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
 									input.style.borderColor='#1f6b3d';error.textContent='';
 								} else {
-									submit.disabled=true;
+									submit.disabled=true;testBtn.disabled=true;
 									input.style.borderColor='#6b1f1f';
 									if(v.length<27) error.textContent='Token too short (expected hcloud_ + 20+ chars)';
 									else if(!v.startsWith('hcloud_')) error.textContent='Must start with hcloud_';
@@ -843,6 +845,26 @@ ${toast}
 							input.addEventListener('input', validate);
 							form.addEventListener('submit', function(e){
 								if(!pattern.test(input.value.trim())){e.preventDefault();input.focus();return false}
+							});
+							// Test button: posts to /settings/hetzner/test via fetch, shows result inline
+							testBtn.addEventListener('click', function(){
+								if(!pattern.test(input.value.trim()))return;
+								var orig = testBtn.textContent; testBtn.disabled=true; testBtn.textContent='Testing…';
+								var fd = new FormData(); fd.append('token', input.value.trim());
+								fetch('/settings/hetzner/test', { method:'POST', body: fd, redirect:'manual' })
+									.then(function(r){
+										if(r.status===0||r.status===302) return r; // redirect = success
+										return r.text().then(function(t){throw new Error(t)});
+									})
+									.then(function(){
+										check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
+										input.style.borderColor='#1f6b3d';error.style.color='#0f0';error.textContent='Token works — verified by Hetzner API';
+									})
+									.catch(function(e){
+										check.style.display='none';input.style.borderColor='#6b1f1f';
+										error.style.color='#f55';error.textContent=e.message || 'Verification failed';
+									})
+									.finally(function(){ testBtn.disabled=false; testBtn.textContent=orig; });
 							});
 						})();
 						</script>`

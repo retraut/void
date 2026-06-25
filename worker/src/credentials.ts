@@ -41,6 +41,33 @@ export async function getProviderToken(
 }
 
 /**
+ * Verify a Hetzner API token by making a read-only call to the
+ * /datacenters endpoint. Returns {ok: true} for a 200 response, or
+ * {ok: false, reason: '...'} for any failure (401 unauthorized, network
+ * error, etc). Used before saving the token to ensure it's actually
+ * valid, not just well-formed.
+ */
+export async function verifyHetznerToken(
+	token: string,
+): Promise<{ ok: boolean; reason?: string; datacenters?: number }> {
+	try {
+		const resp = await fetch("https://api.hetzner.cloud/v1/datacenters", {
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		if (resp.status === 200) {
+			const body = (await resp.json()) as { datacenters?: Array<unknown> };
+			return { ok: true, datacenters: body.datacenters?.length ?? 0 };
+		}
+		if (resp.status === 401 || resp.status === 403) {
+			return { ok: false, reason: "Token rejected by Hetzner (401 Unauthorized) — check the token has read+write scope" };
+		}
+		return { ok: false, reason: `Hetzner returned HTTP ${resp.status}` };
+	} catch (e) {
+		return { ok: false, reason: `Network error contacting Hetzner: ${(e as Error).message}` };
+	}
+}
+
+/**
  * Save (or update) a user's token for a provider. Encrypts before write.
  */
 export async function setProviderToken(

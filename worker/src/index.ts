@@ -346,15 +346,44 @@ app.post("/projects/select", requireSession, async (c) => {
 
 // Provider credential management (HTML form posts, requires session)
 app.post("/settings/hetzner", requireSession, async (c) => {
-	const { setProviderToken } = await import("./credentials");
+	const { setProviderToken, verifyHetznerToken } = await import("./credentials");
 	const form = await c.req.parseBody();
 	const token = (form as Record<string, string>)["token"]?.trim();
 	if (!token) return c.redirect("/settings?toast=error&msg=missing+token");
 	if (!/^hcloud_[A-Za-z0-9_-]{20,}$/.test(token)) {
 		return c.redirect("/settings?toast=error&msg=invalid+Hetzner+token+format+%28expected+hcloud_...%29");
 	}
+	// Live API verification — token must actually work, not just look right.
+	const verify = await verifyHetznerToken(token);
+	if (!verify.ok) {
+		return c.redirect(
+			`/settings?toast=error&msg=${encodeURIComponent(verify.reason || "Token verification failed")}`,
+		);
+	}
 	await setProviderToken(c.env, c.get("user").id, "hetzner", token);
-	return c.redirect("/settings?toast=success&msg=Hetzner+token+saved");
+	return c.redirect(
+		`/settings?toast=success&msg=${encodeURIComponent(`Hetzner token saved (verified — ${verify.datacenters} datacenters reachable)`)}`,
+	);
+});
+
+app.post("/settings/hetzner/test", requireSession, async (c) => {
+	// Just verify the token without saving. Lets users test before committing.
+	const { verifyHetznerToken } = await import("./credentials");
+	const form = await c.req.parseBody();
+	const token = (form as Record<string, string>)["token"]?.trim() || "";
+	if (!token) return c.redirect("/settings?toast=error&msg=missing+token");
+	if (!/^hcloud_[A-Za-z0-9_-]{20,}$/.test(token)) {
+		return c.redirect("/settings?toast=error&msg=invalid+Hetzner+token+format+%28expected+hcloud_...%29");
+	}
+	const verify = await verifyHetznerToken(token);
+	if (!verify.ok) {
+		return c.redirect(
+			`/settings?toast=error&msg=${encodeURIComponent(verify.reason || "Token verification failed")}`,
+		);
+	}
+	return c.redirect(
+		`/settings?toast=success&msg=${encodeURIComponent(`Token works — ${verify.datacenters} datacenters reachable`)}`,
+	);
 });
 
 app.post("/settings/hetzner/delete", requireSession, async (c) => {
