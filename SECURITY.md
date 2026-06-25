@@ -49,12 +49,12 @@ Files: `worker/src/db.ts:26-27`, `worker/src/void-cell.ts:172-224`
 
 ## 🟠 HIGH
 
-### H1. tunnel_token on command line — ⚠️ PARTIALLY FIXED
+### H1. tunnel_token on command line — ✅ FIXED
 
-✅ Stored **encrypted** in D1 (`tunnel_token_encrypted`) via AES-256-GCM with `COOKIE_SECRET`.  
-❌ Still passed as CLI arg to `cloudflared tunnel run --token {token}` — visible via `ps aux`.
+✅ Stored **encrypted** in D1 (`tunnel_token_encrypted`) via AES-256-GCM with `ENCRYPTION_KEY` (or `COOKIE_SECRET` fallback).
+✅ Passed to cloudflared via `TUNNEL_TOKEN` env var, NOT CLI arg. Not visible in `ps aux`.
 
-Files: `agent/src/main.rs:957`, `worker/src/crypto.ts`, `worker/src/mcp.ts:389-391`, `worker/src/webhook.ts:107-109`
+Files: `agent/src/main.rs:981-988`, `worker/src/crypto.ts`, `worker/src/mcp.ts:389-391`, `worker/src/webhook.ts:107-109`
 
 ### H2. Insecure project lookup — ✅ FIXED
 
@@ -110,25 +110,23 @@ File: `agent/src/main.rs:935-949`, `agent/src/config.rs:40`
 
 ## 🆕 NEW FINDINGS
 
-### N1. 🐛 validateShellCommand backtick regex broken
+### N1. 🐛 validateShellCommand backtick regex broken — ✅ FIXED
 
-`security.ts:88`:
+`security.ts:88` previously:
 ```js
 /`, `/,  // intent: match backtick
 ```
-This regex matches literal string `` `, `` (backtick-comma-space-backtick), not a single backtick. Backtick command substitution (` `whoami` `) passes validation.
+This regex matched literal string `` `, `` (backtick-comma-space-backtick), not a single backtick. Backtick command substitution passed validation.
 
-**Fix:** Replace with `/`+/`.
+**Fix applied:** Removed the broken regex entirely. New strict allowlist excludes `` ` `` and all shell metachars at the character level (see N4).
 
-### N2. 🐛 Agent cannot reconnect after setup_token consumed
+### N2. 🐛 Agent cannot reconnect after setup_token consumed — ✅ FIXED
 
-`agent/src/main.rs:149-156` sends setup_token on **every** WS connect. After first successful register, token is consumed. Server rejects reconnect with `token_already_used` → infinite reconnect loop.
+**Fix applied:** Server now issues a persistent `session_token` (`sess_<uuid>`) on first register, stores it in `servers.session_token`, and returns it in the `registered` ack. Agent persists it to `<state_dir>/session_token` and uses it for all subsequent reconnects. The one-time `setup_token` is consumed and never re-sent. On reconnect, the DO checks `session_token` first (with `timingSafeEqual`), then falls back to `setup_token` if no session exists yet (first register only).
 
-Agent never stores or sends a "I'm already registered" proof (e.g. Ed25519 challenge-response or persistent session token).
+Files: `worker/src/void-cell.ts:174-260`, `worker/src/db.ts:7-31`, `agent/src/main.rs:152-178,238-246`
 
-**Fix:** After first register, use Ed25519 challenge-response or a session token instead of setup_token for reconnects.
-
-### N3. 🐛 setup_token in cloud-init plaintext
+### N3. 🐛 setup_token in cloud-init plaintext — ❌ OPEN
 
 `worker/src/hetzner.ts:118`:
 ```toml
@@ -136,38 +134,51 @@ setup_token = "${setup_token}"
 ```
 Token written to cloud-init user_data. Visible in Hetzner Cloud console, cloud-init logs, and VM journal. Anyone with Hetzner UI access can read it and register as that server.
 
-**Fix:** Generate setup_token server-side after VM boot, or use a pre-shared secret per Hetzner API call.
+**Mitigation in place:** N2 (session_token for reconnects) means the setup_token is only useful for ~5 minutes (until the agent registers). After that, the attacker would need the session_token from the VM's local disk, which is much harder to access.
 
-### N4. validateShellCommand allowlist too permissive
+**Proper fix:** Generate setup_token server-side AFTER VM creation, deliver via Hetzner Metadata API or a pre-shared secret per Hetzner API call. Out of scope without real HETZNER_TOKEN to test.
 
-`worker/src/security.ts:85`:
+### N4. validateShellCommand allowlist too permissive — ✅ FIXED
+
+`security.ts:85` previously:
 ```js
 const ALLOWED_SHELL_CHARS = /^[a-zA-Z0-9\s\-_/.:=+,'"*?~!@#%^&;|(){}[\]$]+$/;
 ```
-Allows `;`, `|`, `&`, `$` — all shell metacharacters. Defense relies entirely on `FORBIDDEN_PATTERNS` which are grep-style pattern matches, not a proper allowlist. A command like `; rm -rf / ;` passes because `;` is allowed and there's no forbidden pattern for it.
+Allowed `;`, `|`, `&`, `$` — all shell metacharacters.
 
-**Fix:** Switch to strict allowlist (only safe characters: `a-zA-Z0-9`, `\-_/.:=+,'"*?~!@#%^`), reject `;|&$()` outright.
+**Fix applied:** Replaced with strict allowlist that excludes `;`, `|`, `&`, `$`, `` ` ``, `\`, `<`, `>` entirely. Any shell metacharacter now fails at the character level. `; rm -rf / ;` now rejected.
 
-### N5. COOKIE_SECRET overloaded for encryption
+```js
+const ALLOWED_SHELL_CHARS = /^[a-zA-Z0-9\s\-_/.:=+,'"*?~!@#%^(),{}\[\]]+$/;
+const FORBIDDEN_PATTERNS = [/;/, /\|/, /&/, /\$/, /\\/, /\n/, /\r/, /[<>]/, ...];
+```
 
-`COOKIE_SECRET` used for both session cookies and AES-256-GCM key derivation (`crypto.ts:12-16`). Custom key derivation (cyclic repetition to 32 bytes, no PBKDF2) weakens the encryption.
+### N5. COOKIE_SECRET overloaded for encryption — ✅ FIXED (partial)
 
-**Fix:** Separate secrets for cookie signing vs encryption; use HKDF or PBKDF2 for key derivation.
+**Fix applied:** Added dedicated `ENCRYPTION_KEY` secret. `COOKIE_SECRET` retained as fallback for backward compat. `mcp.ts`, `webhook.ts`, `crypto.ts` updated to prefer `ENCRYPTION_KEY`.
 
-### N6. No Ed25519 verify setup after first register
+**Also fixed:** Replaced weak cyclic-repeat key derivation with SHA-256 derivation (any-length secret → 32-byte key). Stronger than cyclic padding; no PBKDF2 needed since the secret is high-entropy random.
 
-Ed25519 keypair still unused after setup. Agent sends `public_key` on register, server stores it (`agent_public_key` in D1), but never uses it for subsequent auth. All post-register WS frames are unauthenticated at the transport level (only HMAC on deploy messages protects command execution, but heartbeat/log/status are unsigned).
+Files: `worker/src/crypto.ts:14-22`, `worker/src/env.ts:13`, `worker/src/webhook.ts:107-109,120-121`, `worker/src/mcp.ts:389-391,409-410`
+
+**To enable:** `wrangler secret put ENCRYPTION_KEY` (use `openssl rand -hex 32`).
+
+### N6. No Ed25519 verify setup after first register — ⚠️ PARTIALLY FIXED
+
+**Mitigation in place (via N2):** The persistent `session_token` (`sess_<32-hex>`) is itself a 128-bit secret, comparable in strength to a bearer token. Attacker would need to read it from the VM disk to impersonate the agent.
+
+**Proper fix not done:** Ed25519 challenge-response on every post-register frame (heartbeat/log/status) would require a more complex state machine in the DO. Deferred — session_token is sufficient for MVP.
 
 ---
 
 ## Quick wins (updated priorities)
 
-| # | Fix | Effort |
+| # | Fix | Status |
 |---|-----|--------|
-| 1 | Fix backtick regex in `security.ts:88` | 1 line |
-| 2 | Fix agent reconnect (use Ed25519 challenge instead of setup_token) | 3 files, ~30 lines |
-| 3 | Tighten validateShellCommand: reject `;`, `|`, `&`, `$`, `` ` `` outright | 1 file, 5 lines |
-| 4 | Remove setup_token from cloud-init (pass via Hetzner metadata API) | 1 file, 10 lines |
-| 5 | Add per-DO rate limit on send-deploy | 1 file, 10 lines |
-| 6 | Use separate encryption key (not COOKIE_SECRET overloaded) | 2 files, 5 lines |
-| 7 | tunnel_token via env var or temp file instead of CLI arg | 1 file, 5 lines |
+| 1 | Fix backtick regex in `security.ts:88` | ✅ N1 done |
+| 2 | Fix agent reconnect (session_token instead of setup_token) | ✅ N2 done |
+| 3 | Tighten validateShellCommand: reject `;`, `|`, `&`, `$`, `` ` `` outright | ✅ N4 done |
+| 4 | Remove setup_token from cloud-init (pass via Hetzner metadata API) | ❌ N3 — needs real Hetzner env |
+| 5 | Add per-DO rate limit on send-deploy | ❌ M3 — medium |
+| 6 | Use separate encryption key (ENCRYPTION_KEY) | ✅ N5 done |
+| 7 | tunnel_token via TUNNEL_TOKEN env var instead of CLI arg | ✅ H1 done |
