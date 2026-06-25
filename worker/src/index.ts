@@ -211,7 +211,7 @@ app.get("/health", (c) => {
 		name: "void",
 		version: "0.3.1",
 		status: "alive",
-		message: "Vercel DX. Hetzner bill. No SSH.",
+		message: "Best DX. Hetzner pricing. No SSH.",
 		docs: "https://github.com/void-sh/void/blob/main/docs/SPEC.md",
 		bindings: {
 			d1: !!env.void_db,

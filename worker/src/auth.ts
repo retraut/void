@@ -438,7 +438,7 @@ export function renderLandingHtml(opts: {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>void — Vercel DX, Hetzner bill, No SSH</title>
+<title>void — Best DX. Hetzner pricing. No SSH.</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
@@ -498,7 +498,7 @@ export function renderLandingHtml(opts: {
 <div class="wrap">
   ${topRight}
   <h1>deployed <span>into the void</span></h1>
-  <p class="sub">Self-hosted, edge-driven PaaS. Vercel DX, Hetzner bill, No SSH. Your AI deploys from Cursor.</p>
+  <p class="sub">Self-hosted, edge-driven PaaS. Best-in-class DX, Hetzner pricing, no SSH. AI-friendly deploys via MCP.</p>
 
   <div class="actions">
     ${opts.user ? `
