@@ -441,8 +441,45 @@ export function renderLandingHtml(opts: {
 <title>void — Best DX. Hetzner pricing. No SSH.</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-  .wrap{max-width:780px;width:100%;position:relative}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;
+    background:#000;
+    color:#fff;
+    min-height:100vh;
+    display:flex;align-items:center;justify-content:center;
+    padding:24px;
+    position:relative;
+    overflow:hidden;
+  }
+  /* Glass slab — radial gradient makes the background feel like a
+     frosted glass panel in the dark, lighter on the upper-left, fading
+     to pure black on the right/bottom. The 1px noise SVG overlay adds
+     a subtle film-grain texture so it doesn't look flat. */
+  body::before{
+    content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
+    background:
+      radial-gradient(ellipse 70% 60% at 25% 40%, #1c1c1c 0%, #0a0a0a 45%, #000 80%),
+      linear-gradient(135deg, #161616 0%, #050505 60%, #000 100%);
+  }
+  body::after{
+    content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:0.5;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.025 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    mix-blend-mode:overlay;
+  }
+  /* The wrap is a subtle glass card — translucent with a thin
+     highlight on top, gives the H1 the "etched in glass" look */
+  .wrap{
+    max-width:820px;width:100%;position:relative;
+    padding:48px 40px;
+    border-radius:24px;
+    background:linear-gradient(135deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
+    border:1px solid rgba(255,255,255,0.06);
+    box-shadow:
+      0 20px 60px rgba(0,0,0,0.5),
+      inset 0 1px 0 rgba(255,255,255,0.08);
+    backdrop-filter:blur(20px);
+    -webkit-backdrop-filter:blur(20px);
+  }
   .top-right{position:absolute;top:0;right:0;display:flex;align-items:center;gap:12px}
   .gh-link{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;color:#888;transition:color 0.15s}
   .gh-link:hover{color:#fff}
@@ -457,8 +494,18 @@ export function renderLandingHtml(opts: {
   .user-menu-pop a{display:block;padding:8px 12px;border-radius:6px;color:#ccc;font-size:0.9rem;text-decoration:none;transition:background 0.1s}
   .user-menu-pop a:hover{background:#1a1a1a;color:#fff}
   .user-menu-pop hr{border:0;border-top:1px solid #222;margin:4px 6px}
-  h1{font-size:4rem;font-weight:800;letter-spacing:-0.04em;line-height:1;margin-bottom:24px}
-  h1 span{background:linear-gradient(120deg,#fff 0%,#666 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  h1{font-size:4.5rem;font-weight:800;letter-spacing:-0.05em;line-height:1;margin-bottom:24px;position:relative}
+  /* H1 text: white→gray gradient etched into the glass. The "ship to"
+     part is bright (lit by the highlight from upper-left), "the void"
+     fades into the glass edge on the right. */
+  h1 span{
+    background:linear-gradient(95deg, #fff 0%, #f0f0f0 30%, #888 75%, #555 100%);
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+    background-clip:text;
+    /* Subtle inner glow so the text looks like it has light behind it */
+    filter:drop-shadow(0 0 30px rgba(255,255,255,0.04));
+  }
   h1 .o{display:inline-block;font-size:1.05em;font-weight:200;vertical-align:-0.06em;margin:0 -0.04em;animation:o-spin 12s linear infinite}
   @keyframes o-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
   .sub{font-size:1.25rem;color:#999;margin-bottom:32px;line-height:1.5}
