@@ -18,6 +18,8 @@ export interface Env {
 	GITHUB_APP_ID?: string;
 	GITHUB_APP_PRIVATE_KEY?: string;
 	GITHUB_WEBHOOK_SECRET?: string;
+	HETZNER_TOKEN?: string;
+	VOID_AGENT_RELEASE_TAG?: string; // e.g. "v0.1.0" — pin agent version
 	AGENT_SHARED_SECRET?: string; // used to sign WS challenges
 
 	// Durable Objects

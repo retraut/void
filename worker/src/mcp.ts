@@ -15,6 +15,12 @@ import {
 	findDnsRecord,
 	deleteDnsRecord,
 } from "./cf";
+import {
+	buildCloudInit,
+	createServer as hetznerCreateServer,
+	getServer as hetznerGetServer,
+	deleteServer as hetznerDeleteServer,
+} from "./hetzner";
 
 interface JsonRpcRequest {
 	jsonrpc: "2.0";
@@ -39,14 +45,15 @@ const TOOLS = [
 	{
 		name: "void_create_server",
 		description:
-			"Create a new server (provisions a Hetzner Cloud VM and installs the void agent). For MVP this is a stub that returns a fake server_id — real provisioning wires up Hetzner API + cloud-init in v0.1.",
+			"Create a new server. With HETZNER_TOKEN set, this provisions a real Hetzner Cloud VM, runs a cloud-init script that installs the void-agent, and the agent auto-registers with the control plane. Without the token, falls back to inserting a stub row (useful for dev).",
 		inputSchema: {
 			type: "object",
 			properties: {
-				provider: { type: "string", enum: ["hetzner", "digitalocean"], default: "hetzner" },
+				provider: { type: "string", enum: ["hetzner", "digitalocean", "stub"], default: "hetzner" },
 				name: { type: "string", description: "Friendly name, e.g. 'prod-1'" },
-				size: { type: "string", description: "Hetzner server type, e.g. 'cx22'", default: "cx22" },
-				region: { type: "string", description: "Hetzner location, e.g. 'fsn1'", default: "fsn1" },
+				size: { type: "string", description: "Hetzner server type, e.g. 'cx22' (€4.50/mo, 2vCPU/4GB)", default: "cx22" },
+				region: { type: "string", description: "Hetzner location, e.g. 'fsn1' (Falkenstein, DE)", default: "fsn1" },
+				image: { type: "string", description: "OS image", default: "ubuntu-24.04" },
 			},
 			required: ["name"],
 		},
@@ -179,37 +186,146 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 				}
 
 				case "void_create_server": {
-					const id = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+					const provider = (args.provider as string) || "hetzner";
+					const name = args.name as string;
+					const region = (args.region as string) || "fsn1";
+					const size = (args.size as string) || "cx22";
+					const image = (args.image as string) || "ubuntu-24.04";
+					const serverId = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 					const now = Math.floor(Date.now() / 1000);
+
+					// Stub mode: no provider, just insert a row
+					if (provider === "stub" || !env.HETZNER_TOKEN) {
+						await env.void_db
+							.prepare(
+								`INSERT INTO servers (id, name, provider, region, size, status, created_at)
+								 VALUES (?, ?, ?, ?, ?, 'provisioning', ?)`,
+							)
+							.bind(serverId, name, provider, region, size, now)
+							.run();
+						return Response.json(
+							rpc(id, {
+								content: [
+									{
+										type: "text",
+										text: JSON.stringify(
+											{
+												id: serverId,
+												name,
+												provider,
+												region,
+												size,
+												status: "provisioning",
+												note: env.HETZNER_TOKEN
+													? "Stub mode (provider=stub) — no Hetzner VM provisioned"
+													: "HETZNER_TOKEN not configured — inserted stub row. Set the secret for real provisioning.",
+											},
+											null,
+											2
+										),
+									},
+								],
+							})
+						);
+					}
+
+					// Real Hetzner provisioning
+					if (provider !== "hetzner") {
+						return Response.json(
+							rpcErr(
+								id,
+								-32009,
+								`Provider '${provider}' not yet supported. Use 'hetzner' or 'stub'.`,
+							)
+						);
+					}
+
+					// generate a one-time setup token (we'll store it in D1 and the cloud-init
+					// script will pass it to the agent for first registration)
+					const setupToken = `set_${crypto.randomUUID().replace(/-/g, "")}`;
+					// Insert row first with status 'provisioning' so the agent can find itself
 					await env.void_db
 						.prepare(
 							`INSERT INTO servers (id, name, provider, region, size, status, created_at)
-							 VALUES (?, ?, ?, ?, ?, 'provisioning', ?)`
+							 VALUES (?, ?, ?, ?, ?, 'provisioning', ?)`,
 						)
-						.bind(id, args.name, args.provider || "hetzner", args.region || "fsn1", args.size || "cx22", now)
+						.bind(serverId, name, provider, region, size, now)
 						.run();
-					return Response.json(
-						rpc(id, {
-							content: [
-								{
-									type: "text",
-									text: JSON.stringify(
-										{
-											id,
-											name: args.name,
-											provider: args.provider || "hetzner",
-											region: args.region || "fsn1",
-											size: args.size || "cx22",
-											status: "provisioning",
-											note: "MVP stub — real Hetzner provisioning wires up the cloud-init flow in v0.1",
-										},
-										null,
-										2
-									),
-								},
-							],
-						})
-					);
+
+					// Build cloud-init user_data. The agent binary URL points to the
+					// latest release on the void-sh org — adjust when we publish.
+					const apiBase = new URL(request.url).origin.replace(/^http/, "wss");
+					const userData = buildCloudInit({
+						server_id: serverId,
+						setup_token: setupToken,
+						api_base: apiBase,
+						github_release_tag: env.VOID_AGENT_RELEASE_TAG || "v0.1.0",
+					});
+
+					try {
+						const hs = await hetznerCreateServer(env.HETZNER_TOKEN, {
+							name: `void-${serverId.slice(0, 12)}`,
+							server_type: size,
+							image,
+							location: region,
+							user_data: userData,
+						});
+
+						// Update the row with the real Hetzner details
+						await env.void_db
+							.prepare(
+								`UPDATE servers SET provider_server_id = ?, ip_address = ?, status = 'provisioning' WHERE id = ?`,
+							)
+							.bind(
+								String(hs.id),
+								hs.public_net?.ipv4?.ip || null,
+								serverId,
+							)
+							.run();
+
+						// Store setup_token on the servers table too, so we can verify it
+						// when the agent registers. (For MVP we trust the agent; a hardening
+						// would be a separate setup_tokens table with TTL.)
+						await env.void_db
+							.prepare(`UPDATE servers SET agent_public_key = ? WHERE id = ?`)
+							.bind(`pending:${setupToken}`, serverId)
+							.run();
+
+						return Response.json(
+							rpc(id, {
+								content: [
+									{
+										type: "text",
+										text: JSON.stringify(
+											{
+												id: serverId,
+												hetzner_id: hs.id,
+												name: hs.name,
+												status: hs.status, // "initializing" → "starting" → "running"
+												public_ip: hs.public_net?.ipv4?.ip,
+												region: hs.datacenter?.location?.name,
+												datacenter: hs.datacenter?.name,
+												size: hs.server_type?.name,
+												image: hs.image?.name,
+												note: "Agent will auto-register when cloud-init completes (~30-60s). Watch status with void_list_servers.",
+											},
+											null,
+											2
+										),
+									},
+								],
+							})
+						);
+					} catch (e: any) {
+						// Mark server as failed
+						await env.void_db
+							.prepare(`UPDATE servers SET status = 'failed' WHERE id = ?`)
+							.bind(serverId)
+							.run();
+						return Response.json(
+							rpcErr(id, -32010, `Hetzner provisioning failed: ${e?.message || e}`)
+						);
+					}
 				}
 
 				case "void_deploy": {

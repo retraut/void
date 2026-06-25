@@ -22,3 +22,8 @@ The agent will:
 3. `cd /tmp/build/<id> && cd examples/static-site && npm start` (in background)
 4. Report back with local port 3000
 5. (Next step: cloudflared tunnel for public access)
+
+## Agent binary
+
+The void-agent binary is published as a release asset on GitHub:
+https://github.com/void-sh/void/releases/download/v0.1.0/void-agent-linux-x86_64.tar.gz
