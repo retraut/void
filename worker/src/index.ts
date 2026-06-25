@@ -7,6 +7,14 @@ import { ensureSchema } from "./db";
 import { VoidCell } from "./void-cell";
 import { handleMcp } from "./mcp";
 import { handleGitHubWebhook } from "./webhook";
+import {
+	getSessionUser,
+	handleAuthStart,
+	handleAuthCallback,
+	handleAuthMe,
+	handleAuthLogout,
+	renderLandingHtml,
+} from "./auth";
 
 export { VoidCell };
 
@@ -71,13 +79,13 @@ export default {
 		}
 
 		// Health
-		if (path === "/" || path === "/health") {
+		if (path === "/health") {
 			return json({
 				name: "void",
 				version: "0.1.0",
 				status: "alive",
 				message: "Vercel DX. Hetzner bill. No SSH.",
-				docs: "https://github.com/retraut/void/blob/main/docs/SPEC.md",
+				docs: "https://github.com/void-sh/void/blob/main/docs/SPEC.md",
 				bindings: {
 					d1: !!env.void_db,
 					kv: !!env.ROUTES,
@@ -85,23 +93,58 @@ export default {
 					do: !!env.void_cell,
 				},
 				features: {
+					github_oauth: !!env.GITHUB_CLIENT_ID && !!env.GITHUB_CLIENT_SECRET,
 					github_webhook: !!env.GITHUB_WEBHOOK_SECRET,
 					cf_tunnel: !!env.CF_API_TOKEN,
+					hetzner: !!env.HETZNER_TOKEN,
 				},
 			});
+		}
+
+		// Landing page (root)
+		if (path === "/") {
+			const user = await getSessionUser(env, request);
+			const html = renderLandingHtml({
+				user,
+				installed: !!env.GITHUB_CLIENT_ID,
+				cf_tunnel: !!env.CF_API_TOKEN,
+				github_webhook: !!env.GITHUB_WEBHOOK_SECRET,
+			});
+			return new Response(html, {
+				headers: { "content-type": "text/html; charset=utf-8" },
+			});
+		}
+
+		// Auth routes
+		if (path === "/api/auth/github" && request.method === "GET") {
+			return handleAuthStart(request, env);
+		}
+		if (path === "/api/auth/callback" && request.method === "GET") {
+			return handleAuthCallback(request, env);
+		}
+		if (path === "/api/auth/me" && request.method === "GET") {
+			return handleAuthMe(request, env);
+		}
+		if (path === "/api/auth/logout" && request.method === "GET") {
+			return handleAuthLogout(request, env);
 		}
 
 		// API
 		if (path === "/api") {
 			return json({
 				endpoints: [
-					"GET /, /health",
+					"GET /  (landing page)",
+					"GET /health",
 					"POST /mcp (MCP Streamable HTTP)",
 					"WS /cell/:server_id (agent)",
 					"GET /api/servers",
-					"POST /api/servers (create stub)",
+					"POST /api/servers (real Hetzner or stub)",
 					"GET /api/cell/:server_id/status",
 					"POST /api/webhooks/github (git push → auto-deploy)",
+					"GET /api/auth/github (OAuth start)",
+					"GET /api/auth/callback (OAuth callback)",
+					"GET /api/auth/me (current user)",
+					"GET /api/auth/logout",
 				],
 			});
 		}
