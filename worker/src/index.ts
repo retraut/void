@@ -52,7 +52,11 @@ const CORS_HEADERS = {
 	"access-control-max-age": "86400",
 } as const;
 
-const app = new Hono<{ Bindings: Env }>();
+type Variables = {
+	user: { id: string; username: string; avatar_url: string | null };
+};
+
+const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // ============================================================
 // Global middleware
@@ -92,7 +96,7 @@ app.use(
 // Bearer auth — applied to all /api/* except public auth + webhook
 // ============================================================
 
-const bearerOnly = async (c: import("hono").Context, next: import("hono").Next) => {
+const bearerOnly = async (c: any, next: any) => {
 	const fail = requireBearer(c.env, c.req.raw);
 	if (fail) return fail;
 	await next();
@@ -107,6 +111,24 @@ app.use("/api/*", async (c, next) => {
 	if (p.startsWith("/api/auth/") || p.startsWith("/api/webhooks/")) return next();
 	return bearerOnly(c, next);
 });
+
+// ============================================================
+// Session auth — UI pages require a valid session cookie
+// ============================================================
+
+const requireSession = async (c: any, next: any) => {
+	const user = await getSessionUser(c.env, c.req.raw);
+	if (!user) {
+		// Browser visit: redirect to OAuth start. Programmatic: 401.
+		const accept = c.req.header("Accept") || "";
+		if (accept.includes("text/html")) {
+			return c.redirect("/api/auth/github");
+		}
+		return c.json({ error: "unauthorized", message: "session required" }, 401);
+	}
+	c.set("user", user);
+	await next();
+};
 
 // ============================================================
 // DO forwarding — /cell/* and /api/cell/* (Hono + path params)
@@ -253,36 +275,30 @@ app.get("/api/servers", async (c) => {
 });
 
 // ============================================================
-// UI pages (session cookie via getSessionUser)
+// UI pages (require session cookie)
 // ============================================================
 
-app.get("/servers", async (c) => {
-	const user = await getSessionUser(c.env, c.req.raw);
-	return renderServersPage(c.env, user);
+app.get("/servers", requireSession, async (c) => {
+	return renderServersPage(c.env, c.get("user"));
 });
 
-app.get("/projects", async (c) => {
-	const user = await getSessionUser(c.env, c.req.raw);
-	return renderProjectsPage(c.env, user);
+app.get("/projects", requireSession, async (c) => {
+	return renderProjectsPage(c.env, c.get("user"));
 });
 
-app.get("/deployments", async (c) => {
-	const user = await getSessionUser(c.env, c.req.raw);
+app.get("/deployments", requireSession, async (c) => {
 	const projectFilter = c.req.query("project") ?? null;
 	const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
 	const perPage = Math.min(100, Math.max(1, parseInt(c.req.query("per_page") || "20", 10) || 20));
-	return renderDeploymentsPage(c.env, user, projectFilter, page, perPage);
+	return renderDeploymentsPage(c.env, c.get("user"), projectFilter, page, perPage);
 });
 
-app.get("/deployments/:id", async (c) => {
-	const user = await getSessionUser(c.env, c.req.raw);
-	return renderDeploymentLogsPage(c.env, user, c.req.param("id"));
+app.get("/deployments/:id", requireSession, async (c) => {
+	return renderDeploymentLogsPage(c.env, c.get("user"), c.req.param("id"));
 });
 
 // UI form action: rotate session token (POST from the rotate button)
-app.post("/servers/:id/rotate-session", async (c) => {
-	const user = await getSessionUser(c.env, c.req.raw);
-	if (!user) return c.text("Login required", 401);
+app.post("/servers/:id/rotate-session", requireSession, async (c) => {
 	const serverId = c.req.param("id");
 	const stub = c.env.void_cell.get(c.env.void_cell.idFromName(serverId));
 	const resp = await stub.fetch(`https://cell/${serverId}/rotate-session`, { method: "POST" });
