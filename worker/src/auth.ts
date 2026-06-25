@@ -260,7 +260,7 @@ export async function handleAuthCallback(c: Context): Promise<Response> {
 		username: ghUser.login,
 		avatarUrl: ghUser.avatar_url,
 		redirectTo: `${url.origin}${returnTo}`,
-		delayMs: 1000,
+		delayMs: 2500,
 	}));
 }
 
@@ -363,7 +363,7 @@ export async function handleAuthLogout(c: Context): Promise<Response> {
 	return c.html(authInterstitial({
 		kind: "logout",
 		redirectTo: new URL("/", c.req.url).toString(),
-		delayMs: 600,
+		delayMs: 1500,
 	}));
 }
 
