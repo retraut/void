@@ -459,6 +459,8 @@ export function renderLandingHtml(opts: {
   .user-menu-pop hr{border:0;border-top:1px solid #222;margin:4px 6px}
   h1{font-size:4rem;font-weight:800;letter-spacing:-0.04em;line-height:1;margin-bottom:24px}
   h1 span{background:linear-gradient(120deg,#fff 0%,#666 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  h1 .o{display:inline-block;font-size:1.05em;font-weight:200;vertical-align:-0.06em;margin:0 -0.04em;animation:o-spin 12s linear infinite}
+  @keyframes o-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
   .sub{font-size:1.25rem;color:#999;margin-bottom:32px;line-height:1.5}
   .taglines{position:relative;height:3.4em;margin-bottom:12px;font-size:1.25rem;color:#999;line-height:1.5;overflow:hidden}
   .tagline{position:absolute;top:0;left:0;right:0;opacity:0;transform:translateY(10px);animation:tagline-cycle 20s linear infinite}
@@ -509,7 +511,7 @@ export function renderLandingHtml(opts: {
 <body>
 <div class="wrap">
   ${topRight}
-  <h1>ship to <span>the void</span></h1>
+  <h1>ship to the <span class="o">∅</span> void</h1>
   <div class="taglines" aria-live="polite">
     <span class="tagline t1">Self-hosted, edge-driven PaaS. Best-in-class DX, Hetzner pricing, no SSH. AI-deploys via MCP.</span>
     <span class="tagline t2">your AI writes the code. void ships it.</span>
