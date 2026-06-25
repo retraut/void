@@ -172,9 +172,10 @@ function html(
   .pager{display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:12px 4px;font-size:0.9rem}
   .pager a{color:#6cf;padding:4px 10px;border:1px solid #333;border-radius:6px;text-decoration:none}
   .pager a:hover{background:#1a1a1a}
-  .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:6px;font-size:0.9rem;font-weight:600;text-decoration:none;border:1px solid transparent;cursor:pointer}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:6px;font-size:0.9rem;font-weight:600;text-decoration:none;border:1px solid transparent;cursor:pointer;transition:opacity 0.15s,background 0.15s}
   .btn-primary{background:#fff;color:#000}
   .btn-secondary{background:#1a1a1a;color:#fff;border-color:#333}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;background:#1a1a1a!important;color:#666!important;border-color:#222!important}
   .btn-danger{background:#1a0a0a;color:#f44;border-color:#533}
   .btn-danger:hover{background:#2a0a0a;border-color:#f44}
 
@@ -851,18 +852,22 @@ ${toast}
 								if(!pattern.test(input.value.trim()))return;
 								var orig = testBtn.textContent; testBtn.disabled=true; testBtn.textContent='Testing…';
 								var fd = new FormData(); fd.append('token', input.value.trim());
-								fetch('/settings/hetzner/test', { method:'POST', body: fd, redirect:'manual' })
-									.then(function(r){
-										if(r.status===0||r.status===302) return r; // redirect = success
-										return r.text().then(function(t){throw new Error(t)});
-									})
-									.then(function(){
-										check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
-										input.style.borderColor='#1f6b3d';error.style.color='#0f0';error.textContent='Token works — verified by Hetzner API';
+								fetch('/settings/hetzner/test', { method:'POST', body: fd })
+									.then(function(r){ return r.json().then(function(j){return{ok:r.ok,json:j}}) })
+									.then(function(res){
+										if(res.ok && res.json && res.json.ok){
+											check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
+											input.style.borderColor='#1f6b3d';error.style.color='#0f0';
+											error.textContent='Token works — verified by Hetzner API ('+(res.json.datacenters||0)+' datacenters reachable)';
+										} else {
+											check.style.display='none';input.style.borderColor='#6b1f1f';
+											error.style.color='#f55';
+											error.textContent=(res.json && res.json.reason) || 'Verification failed';
+										}
 									})
 									.catch(function(e){
 										check.style.display='none';input.style.borderColor='#6b1f1f';
-										error.style.color='#f55';error.textContent=e.message || 'Verification failed';
+										error.style.color='#f55';error.textContent='Network error: '+(e.message||e);
 									})
 									.finally(function(){ testBtn.disabled=false; testBtn.textContent=orig; });
 							});

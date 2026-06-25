@@ -367,23 +367,21 @@ app.post("/settings/hetzner", requireSession, async (c) => {
 });
 
 app.post("/settings/hetzner/test", requireSession, async (c) => {
-	// Just verify the token without saving. Lets users test before committing.
+	// Just verify the token without saving. Returns JSON so the client
+	// can tell success from failure (vs always-302 redirect which the
+	// client can't distinguish).
 	const { verifyHetznerToken } = await import("./credentials");
 	const form = await c.req.parseBody();
 	const token = (form as Record<string, string>)["token"]?.trim() || "";
-	if (!token) return c.redirect("/settings?toast=error&msg=missing+token");
+	if (!token) return c.json({ ok: false, reason: "missing token" }, 400);
 	if (!/^hcloud_[A-Za-z0-9_-]{20,}$/.test(token)) {
-		return c.redirect("/settings?toast=error&msg=invalid+Hetzner+token+format+%28expected+hcloud_...%29");
+		return c.json({ ok: false, reason: "invalid format (expected hcloud_...)" }, 400);
 	}
 	const verify = await verifyHetznerToken(token);
 	if (!verify.ok) {
-		return c.redirect(
-			`/settings?toast=error&msg=${encodeURIComponent(verify.reason || "Token verification failed")}`,
-		);
+		return c.json({ ok: false, reason: verify.reason || "verification failed" }, 400);
 	}
-	return c.redirect(
-		`/settings?toast=success&msg=${encodeURIComponent(`Token works — ${verify.datacenters} datacenters reachable`)}`,
-	);
+	return c.json({ ok: true, datacenters: verify.datacenters });
 });
 
 app.post("/settings/hetzner/delete", requireSession, async (c) => {
