@@ -22,7 +22,6 @@ import {
 	deleteServer as hetznerDeleteServer,
 } from "./hetzner";
 import { validateRef, validateRepoUrl, validateShellCommand } from "./security";
-import { getProviderToken } from "./credentials";
 import { encrypt, decrypt } from "./crypto";
 
 interface JsonRpcRequest {
@@ -199,17 +198,8 @@ export async function handleMcp(c: any): Promise<Response> {
 					const serverId = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 					const now = Math.floor(Date.now() / 1000);
 
-					// Per-user Hetzner credential (preferred) → fallback to env
-					let hetznerToken: string | null = null;
-					if (provider === "hetzner") {
-						const user = c.get?.("user");
-						if (user?.id) {
-							hetznerToken = await getProviderToken(env, user.id, "hetzner");
-						}
-					}
-
-					// Stub mode: no provider, just insert a row
-					if (provider === "stub" || !hetznerToken) {
+					// Stub mode: no provider, or env HETZNER_TOKEN not set
+					if (provider === "stub" || !env.HETZNER_TOKEN) {
 						await env.void_db
 							.prepare(
 								`INSERT INTO servers (id, name, provider, region, size, status, created_at)
@@ -230,9 +220,9 @@ export async function handleMcp(c: any): Promise<Response> {
 												region,
 												size,
 												status: "provisioning",
-												note: hetznerToken
+												note: env.HETZNER_TOKEN
 													? "Stub mode (provider=stub) — no Hetzner VM provisioned"
-													: "No Hetzner API token — go to /settings to add one (per-user), or pass provider=stub. Falls back to env HETZNER_TOKEN for self-hosted setups.",
+													: "HETZNER_TOKEN not configured — set it via 'wrangler secret put HETZNER_TOKEN' for real provisioning.",
 											},
 											null,
 											2
@@ -277,7 +267,7 @@ export async function handleMcp(c: any): Promise<Response> {
 					});
 
 					try {
-						const hs = await hetznerCreateServer(hetznerToken as string, {
+						const hs = await hetznerCreateServer(env.HETZNER_TOKEN, {
 							name: `void-${serverId.slice(0, 12)}`,
 							server_type: size,
 							image,

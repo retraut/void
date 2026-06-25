@@ -324,26 +324,6 @@ app.get("/settings", requireSession, async (c) => {
 	return renderSettingsPage(c.env, c.get("user"));
 });
 
-// Provider credential management (HTML form posts, requires session)
-app.post("/settings/hetzner", requireSession, async (c) => {
-	const { setProviderToken } = await import("./credentials");
-	const form = await c.req.parseBody();
-	const token = (form as Record<string, string>)["token"]?.trim();
-	if (!token) return c.text("missing token", 400);
-	// Basic shape check (Hetzner tokens start with hcloud_)
-	if (!/^hcloud_[A-Za-z0-9_-]{20,}$/.test(token)) {
-		return c.text("invalid Hetzner token format (expected hcloud_...)", 400);
-	}
-	await setProviderToken(c.env, c.get("user").id, "hetzner", token);
-	return c.redirect("/settings");
-});
-
-app.post("/settings/hetzner/delete", requireSession, async (c) => {
-	const { deleteProviderToken } = await import("./credentials");
-	await deleteProviderToken(c.env, c.get("user").id, "hetzner");
-	return c.redirect("/settings");
-});
-
 // UI form action: rotate session token (POST from the rotate button)
 app.post("/servers/:id/rotate-session", requireSession, async (c) => {
 	const serverId = c.req.param("id");

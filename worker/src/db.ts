@@ -72,16 +72,6 @@ CREATE TABLE IF NOT EXISTS deployments (
 CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_servers_user ON servers(user_id);
 CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
-
-CREATE TABLE IF NOT EXISTS provider_credentials (
-	id TEXT PRIMARY KEY,
-	user_id TEXT NOT NULL,
-	provider TEXT CHECK(provider IN ('hetzner')) NOT NULL,
-	encrypted_token TEXT NOT NULL,
-	created_at INTEGER DEFAULT (unixepoch()),
-	UNIQUE(user_id, provider)
-);
-CREATE INDEX IF NOT EXISTS idx_provider_credentials_user ON provider_credentials(user_id);
 `;
 
 // Idempotent column additions (for migrating existing tables created by an older schema).

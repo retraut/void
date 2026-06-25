@@ -584,11 +584,6 @@ export async function renderSettingsPage(
 				.first<{ id: string; username: string; avatar_url: string | null; github_id: string; created_at: number }>()
 		: null;
 
-	// Per-user provider credentials (encrypted tokens)
-	const { listProviderCredentials } = await import("./credentials");
-	const creds = user ? await listProviderCredentials(env, user.id) : [];
-	const hetznerCred = creds.find((c) => c.provider === "hetzner");
-
 	const body = `
 <h1>Settings</h1>
 
@@ -615,30 +610,12 @@ export async function renderSettingsPage(
 	<div class="settings-row" style="align-items:flex-start;padding:20px 0">
 		<div class="label">
 			<strong>Hetzner Cloud</strong>
-			<small>API token for provisioning VMs in your Hetzner Cloud project. Encrypted at rest with AES-256-GCM.</small>
+			<small>VM provisioning API. void reads <code>HETZNER_TOKEN</code> from the Worker env — set it once with <code style="color:#6cf">wrangler secret put HETZNER_TOKEN</code> and all server creates in this deployment will use it.</small>
 		</div>
 		<div class="value" style="text-align:right">
-			${
-				hetznerCred
-					? `<span class="meta">✓ Token saved ${timeAgo(hetznerCred.created_at)}</span>
-					<form method="POST" action="/settings/hetzner/delete" style="margin-top:8px" onsubmit="return confirm('Delete Hetzner API token? Future server creates will fall back to env HETZNER_TOKEN if set, otherwise use stub mode.')">
-						<button type="submit" class="btn btn-secondary" style="padding:6px 12px;font-size:0.85rem">Delete token</button>
-					</form>`
-					: env.HETZNER_TOKEN
-						? `<span class="meta">Using env HETZNER_TOKEN (shared)</span>
-						<details style="margin-top:8px">
-							<summary style="color:#6cf;cursor:pointer;font-size:0.85rem">Override with your own token</summary>
-							<form method="POST" action="/settings/hetzner" style="margin-top:12px;display:flex;gap:8px">
-								<input type="password" name="token" placeholder="hcloud_xxxxxxxxxxxxxxxx" required style="flex:1;padding:8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-family:ui-monospace,monospace;font-size:0.85rem">
-								<button type="submit" class="btn btn-primary" style="padding:8px 14px">Save</button>
-							</form>
-						</details>`
-						: `<form method="POST" action="/settings/hetzner" style="display:flex;gap:8px">
-							<input type="password" name="token" placeholder="hcloud_xxxxxxxxxxxxxxxx" required style="flex:1;padding:8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-family:ui-monospace,monospace;font-size:0.85rem">
-							<button type="submit" class="btn btn-primary" style="padding:8px 14px">Save</button>
-						</form>
-						<small style="display:block;margin-top:6px;color:#666">Get a token at <a href="https://console.hetzner.cloud" target="_blank" rel="noopener" style="color:#6cf">console.hetzner.cloud</a> → Security → API Tokens</small>`
-			}
+			${env.HETZNER_TOKEN
+				? `<span class="meta" style="color:#0f0">✓ HETZNER_TOKEN is configured</span>`
+				: `<span class="meta" style="color:#f90">⚠ HETZNER_TOKEN not set</span>`}
 		</div>
 	</div>
 </div>
