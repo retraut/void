@@ -1,7 +1,27 @@
 /**
  * void Worker — main entry
+ *
+ * Hono-based router. Old code was 262 lines of hand-rolled if/else with
+ * `path.startsWith` / `path ===` / `path.match` mixed together. Now: a
+ * flat route table at the top, middleware for cross-cutting concerns.
+ *
+ * Layered:
+ *   1. CORS preflight (cors middleware on /mcp, /health)
+ *   2. Bearer auth on /api/* (except /api/auth/*, /api/webhooks/*)
+ *   3. DO forwarding on /cell/* and /api/cell/*
+ *   4. Route handlers
+ *
+ * Notes:
+ *   - security.ts (validateRef / validateRepoUrl / validateShellCommand) is
+ *     STILL the source of truth for security validation. We don't use
+ *     zValidator because shell command security is allowlist-based, not
+ *     shape-based. See docs/HONO.md for the rationale.
+ *   - MCP (`/mcp`) keeps its own JSON-RPC router inside mcp.ts.
+ *   - WebSocket upgrade on /cell/* stays in the DO forwarding middleware.
  */
 
+import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { Env } from "./env";
 import { ensureSchema } from "./db";
 import { VoidCell } from "./void-cell";
@@ -25,12 +45,279 @@ import {
 
 export { VoidCell };
 
-function json(data: unknown, status = 200): Response {
-	return new Response(JSON.stringify(data), {
-		status,
-		headers: { "content-type": "application/json" },
+const CORS_HEADERS = {
+	"access-control-allow-origin": "*",
+	"access-control-allow-methods": "GET, POST, OPTIONS",
+	"access-control-allow-headers": "content-type, authorization",
+	"access-control-max-age": "86400",
+} as const;
+
+const app = new Hono<{ Bindings: Env }>();
+
+// ============================================================
+// Global middleware
+// ============================================================
+
+// Run schema migrations on every request (idempotent + cached per-isolate).
+// Wrapped so it runs before any route.
+app.use("*", async (c, next) => {
+	await ensureSchema(c.env.void_db);
+	await next();
+});
+
+// ============================================================
+// CORS — only on routes that need cross-origin
+// ============================================================
+
+app.use(
+	"/mcp",
+	cors({
+		origin: "*",
+		allowMethods: ["POST", "OPTIONS"],
+		allowHeaders: ["content-type", "authorization"],
+		maxAge: 86400,
+	}),
+);
+
+app.use(
+	"/health",
+	cors({
+		origin: "*",
+		allowMethods: ["GET", "OPTIONS"],
+		maxAge: 86400,
+	}),
+);
+
+// ============================================================
+// Bearer auth — applied to all /api/* except public auth + webhook
+// ============================================================
+
+const bearerOnly = async (c: import("hono").Context, next: import("hono").Next) => {
+	const fail = requireBearer(c.env, c.req.raw);
+	if (fail) return fail;
+	await next();
+};
+
+// Apply bearer to all /api/<something>/* except /api/auth/* (session cookie)
+// and /api/webhooks/* (HMAC). Note: Hono's `/api/*` matches `/api` itself too,
+// so we guard with an explicit check.
+app.use("/api/*", async (c, next) => {
+	const p = c.req.path;
+	if (p === "/api" || p === "/api/") return next();
+	if (p.startsWith("/api/auth/") || p.startsWith("/api/webhooks/")) return next();
+	return bearerOnly(c, next);
+});
+
+// ============================================================
+// DO forwarding — /cell/* and /api/cell/* (Hono + path params)
+// ============================================================
+
+/**
+ * Forward a request to a per-server VoidCell Durable Object.
+ * The DO's URL parser expects paths of the form `/<serverId>/<action>`.
+ * We rewrite the URL so the DO receives the path it expects, then pass
+ * method/body/headers through unchanged.
+ */
+const forwardToCell = (c: any, serverId: string) => {
+	const stub = c.env.void_cell.get(c.env.void_cell.idFromName(serverId));
+	const inUrl = new URL(c.req.raw.url);
+	// /cell/:serverId[/sub]  OR  /api/cell/:serverId[/sub]  →  /:serverId[/sub]
+	const m = inUrl.pathname.match(/^\/(?:api\/)?cell\/[^/]+(\/.*)?$/);
+	const subPath = m?.[1] || "";
+	const internalUrl = `https://cell/${serverId}${subPath}${inUrl.search}`;
+	return stub.fetch(new Request(internalUrl, c.req.raw));
+};
+
+// /cell/* — WS upgrade OR HTTP forwarding. WS auth is in the DO (setup_token
+// or session_token in the first frame). HTTP requires bearer.
+app.all("/cell/:serverId", async (c) => {
+	if (c.req.header("Upgrade") === "websocket") {
+		// WS upgrade: bypass bearer auth (the agent authenticates via the
+		// first register frame inside the DO).
+		return forwardToCell(c, c.req.param("serverId"));
+	}
+	// HTTP routes through /cell/:serverId/* — must be bearer-authed
+	return bearerOnly(c, () => forwardToCell(c, c.req.param("serverId")));
+});
+
+app.all("/cell/:serverId/*", async (c) => {
+	if (c.req.header("Upgrade") === "websocket") {
+		return forwardToCell(c, c.req.param("serverId"));
+	}
+	return bearerOnly(c, () => forwardToCell(c, c.req.param("serverId")));
+});
+
+// /api/cell/* — bearer-authed DO forwarding (UI buttons, REST clients).
+// The bearer middleware is applied via app.use("/api/*") which excludes
+// /api/auth/* and /api/webhooks/*; /api/cell/* is included.
+app.all("/api/cell/:serverId/*", async (c) => forwardToCell(c, c.req.param("serverId")));
+
+app.all("/api/cell/:serverId", async (c) => forwardToCell(c, c.req.param("serverId")));
+
+// ============================================================
+// Public routes
+// ============================================================
+
+app.get("/", async (c) => {
+	const user = await getSessionUser(c.env, c.req.raw);
+	const html = renderLandingHtml({
+		user,
+		installed: !!c.env.GITHUB_CLIENT_ID,
+		cf_tunnel: !!c.env.CF_API_TOKEN,
+		github_webhook: !!c.env.GITHUB_WEBHOOK_SECRET,
 	});
-}
+	return c.html(html);
+});
+
+app.get("/health", (c) => {
+	const env = c.env;
+	return c.json({
+		name: "void",
+		version: "0.3.1",
+		status: "alive",
+		message: "Vercel DX. Hetzner bill. No SSH.",
+		docs: "https://github.com/void-sh/void/blob/main/docs/SPEC.md",
+		bindings: {
+			d1: !!env.void_db,
+			kv: !!env.ROUTES,
+			r2: !!env.void_builds,
+			do: !!env.void_cell,
+		},
+		features: {
+			github_oauth: !!env.GITHUB_CLIENT_ID && !!env.GITHUB_CLIENT_SECRET,
+			github_webhook: !!env.GITHUB_WEBHOOK_SECRET,
+			cf_tunnel: !!env.CF_API_TOKEN,
+			hetzner: !!env.HETZNER_TOKEN,
+		},
+	});
+});
+
+app.get("/api", (c) => {
+	return c.json({
+		endpoints: [
+			"GET  /",
+			"GET  /health",
+			"POST /mcp  (MCP Streamable HTTP, Bearer)",
+			"WS   /cell/:server_id  (agent)",
+			"GET  /api/servers  (Bearer)",
+			"GET  /api/cell/:server_id/status  (Bearer)",
+			"POST /api/cell/:server_id/rotate-session  (Bearer)",
+			"POST /api/webhooks/github  (HMAC)",
+			"GET  /api/auth/github  (OAuth start)",
+			"GET  /api/auth/callback  (OAuth callback)",
+			"GET  /api/auth/me",
+			"GET  /api/auth/logout",
+			"GET  /servers  (UI, session cookie)",
+			"GET  /projects  (UI, session cookie)",
+			"GET  /deployments  (UI, session cookie)",
+			"GET  /deployments/:id  (UI, session cookie)",
+			"POST /servers/:id/rotate-session  (UI form action, session cookie)",
+		],
+	});
+});
+
+// ============================================================
+// MCP
+// ============================================================
+
+app.post("/mcp", bearerOnly, async (c) => {
+	return handleMcp(c.req.raw, c.env);
+});
+
+// ============================================================
+// Auth (session cookie, NOT bearer)
+// ============================================================
+
+app.get("/api/auth/github", (c) => handleAuthStart(c.req.raw, c.env));
+app.get("/api/auth/callback", (c) => handleAuthCallback(c.req.raw, c.env));
+app.get("/api/auth/me", (c) => handleAuthMe(c.req.raw, c.env));
+app.get("/api/auth/logout", (c) => handleAuthLogout(c.req.raw, c.env));
+
+// ============================================================
+// Webhooks (HMAC, NOT bearer)
+// ============================================================
+
+app.post("/api/webhooks/github", (c) => handleGitHubWebhook(c.req.raw, c.env));
+
+// ============================================================
+// REST API (Bearer via middleware)
+// ============================================================
+
+app.get("/api/servers", async (c) => {
+	const { results } = await c.env.void_db
+		.prepare(
+			"SELECT id, name, provider, status, region, size, last_seen_at FROM servers ORDER BY created_at DESC",
+		)
+		.all();
+	return c.json({ servers: results });
+});
+
+// ============================================================
+// UI pages (session cookie via getSessionUser)
+// ============================================================
+
+app.get("/servers", async (c) => {
+	const user = await getSessionUser(c.env, c.req.raw);
+	return renderServersPage(c.env, user);
+});
+
+app.get("/projects", async (c) => {
+	const user = await getSessionUser(c.env, c.req.raw);
+	return renderProjectsPage(c.env, user);
+});
+
+app.get("/deployments", async (c) => {
+	const user = await getSessionUser(c.env, c.req.raw);
+	const projectFilter = c.req.query("project") ?? null;
+	const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
+	const perPage = Math.min(100, Math.max(1, parseInt(c.req.query("per_page") || "20", 10) || 20));
+	return renderDeploymentsPage(c.env, user, projectFilter, page, perPage);
+});
+
+app.get("/deployments/:id", async (c) => {
+	const user = await getSessionUser(c.env, c.req.raw);
+	return renderDeploymentLogsPage(c.env, user, c.req.param("id"));
+});
+
+// UI form action: rotate session token (POST from the rotate button)
+app.post("/servers/:id/rotate-session", async (c) => {
+	const user = await getSessionUser(c.env, c.req.raw);
+	if (!user) return c.text("Login required", 401);
+	const serverId = c.req.param("id");
+	const stub = c.env.void_cell.get(c.env.void_cell.idFromName(serverId));
+	const resp = await stub.fetch(`https://cell/${serverId}/rotate-session`, { method: "POST" });
+	const data: any = await resp.json();
+	const newToken = (data && data.session_token) || "(error)";
+	return c.html(`<!doctype html><html><head><meta charset="UTF-8"><title>Session rotated · void</title>
+<style>body{font-family:-apple-system,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;margin:0}
+.box{max-width:600px;background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:32px}
+h1{font-size:1.5rem;margin-bottom:16px}
+code{background:#1a1a1a;padding:6px 10px;border-radius:6px;display:block;color:#0f0;font-family:ui-monospace,monospace;margin:8px 0;word-break:break-all}
+.warn{color:#f90;font-size:0.9rem;margin:16px 0;padding:12px;background:#1a0a00;border-radius:6px}
+a{color:#6cf;display:inline-block;margin-top:16px}</style></head>
+<body><div class="box">
+<h1>Session token rotated for ${escapeHtml(serverId)}</h1>
+<p>New token:</p><code>${escapeHtml(newToken)}</code>
+<div class="warn">The agent has been disconnected. Update <code>&lt;state_dir&gt;/session_token</code> on the agent host with the new token, then restart the agent.</div>
+<a href="/servers">Back to servers</a>
+</div></body></html>`);
+});
+
+// ============================================================
+// 404
+// ============================================================
+
+app.notFound((c) => c.json({ error: "Not found", path: c.req.path }, 404));
+
+// ============================================================
+// Worker entry
+// ============================================================
+
+export default {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+		return app.fetch(request, env, ctx);
+	},
+} satisfies ExportedHandler<Env>;
 
 function escapeHtml(s: string): string {
 	return s
@@ -40,223 +327,3 @@ function escapeHtml(s: string): string {
 		.replace(/"/g, "&quot;")
 		.replace(/'/g, "&#39;");
 }
-
-export default {
-	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-		// Run schema migrations synchronously on first call (idempotent after).
-		// Doing this inline (not via waitUntil) ensures the migration has
-		// completed before we try to query the new columns.
-		await ensureSchema(env.void_db);
-
-		const url = new URL(request.url);
-		const path = url.pathname;
-
-		// CORS preflight: ONLY for /mcp (real cross-origin) and /health (public).
-		// Other routes have NO CORS — they require same-origin or auth header.
-		if (request.method === "OPTIONS" && (path === "/mcp" || path === "/health")) {
-			return new Response(null, {
-				status: 204,
-				headers: {
-					"access-control-allow-origin": "*",
-					"access-control-allow-methods": "GET, POST, OPTIONS",
-					"access-control-allow-headers": "content-type, authorization",
-					"access-control-max-age": "86400",
-				},
-			});
-		}
-
-		// Cell routes: WS upgrade OR HTTP /cell/:id/{logs,status,send-deploy}
-		if (path.startsWith("/cell/")) {
-			const isWsUpgrade = request.headers.get("Upgrade") === "websocket";
-
-			// WS upgrade: agent authenticates with setup_token in register frame (no bearer)
-			// HTTP: require Bearer auth (called by MCP tools, browser SSE)
-			if (!isWsUpgrade) {
-				const authFail = requireBearer(env, request);
-				if (authFail) return authFail;
-			}
-
-			const parts = path.slice("/cell/".length).split("/");
-			const serverId = parts[0];
-			if (!serverId) {
-				return new Response("Missing server_id", { status: 400 });
-			}
-			const cellId = env.void_cell.idFromName(serverId);
-			const cellStub = env.void_cell.get(cellId);
-			const subPath = "/" + parts.slice(1).join("/") + url.search;
-			const internalUrl = new URL("https://cell" + subPath);
-			const newRequest = new Request(internalUrl.toString(), request);
-			return cellStub.fetch(newRequest);
-		}
-
-		// MCP endpoint (requires Bearer auth)
-		if (path === "/mcp") {
-			const authFail = requireBearer(env, request);
-			if (authFail) {
-				// Add CORS headers to auth failure so browser-based clients can read it
-				authFail.headers.set("access-control-allow-origin", "*");
-				return authFail;
-			}
-			const resp = await handleMcp(request, env);
-			resp.headers.set("access-control-allow-origin", "*");
-			return resp;
-		}
-
-		// Health
-		if (path === "/health") {
-			return json({
-				name: "void",
-				version: "0.1.0",
-				status: "alive",
-				message: "Vercel DX. Hetzner bill. No SSH.",
-				docs: "https://github.com/void-sh/void/blob/main/docs/SPEC.md",
-				bindings: {
-					d1: !!env.void_db,
-					kv: !!env.ROUTES,
-					r2: !!env.void_builds,
-					do: !!env.void_cell,
-				},
-				features: {
-					github_oauth: !!env.GITHUB_CLIENT_ID && !!env.GITHUB_CLIENT_SECRET,
-					github_webhook: !!env.GITHUB_WEBHOOK_SECRET,
-					cf_tunnel: !!env.CF_API_TOKEN,
-					hetzner: !!env.HETZNER_TOKEN,
-				},
-			});
-		}
-
-		// Landing page (root)
-		if (path === "/") {
-			const user = await getSessionUser(env, request);
-			const html = renderLandingHtml({
-				user,
-				installed: !!env.GITHUB_CLIENT_ID,
-				cf_tunnel: !!env.CF_API_TOKEN,
-				github_webhook: !!env.GITHUB_WEBHOOK_SECRET,
-			});
-			return new Response(html, {
-				headers: { "content-type": "text/html; charset=utf-8" },
-			});
-		}
-
-		// Auth routes
-		if (path === "/api/auth/github" && request.method === "GET") {
-			return handleAuthStart(request, env);
-		}
-		if (path === "/api/auth/callback" && request.method === "GET") {
-			return handleAuthCallback(request, env);
-		}
-		if (path === "/api/auth/me" && request.method === "GET") {
-			return handleAuthMe(request, env);
-		}
-		if (path === "/api/auth/logout" && request.method === "GET") {
-			return handleAuthLogout(request, env);
-		}
-
-		// UI pages (require session cookie)
-		if (path === "/servers") {
-			const user = await getSessionUser(env, request);
-			return renderServersPage(env, user);
-		}
-		// UI form action: rotate session token
-		const rotateMatch = path.match(/^\/servers\/([^/]+)\/rotate-session$/);
-		if (rotateMatch && request.method === "POST") {
-			const user = await getSessionUser(env, request);
-			if (!user) return new Response("Login required", { status: 401 });
-			const serverId = rotateMatch[1];
-			const cellId = env.void_cell.idFromName(serverId);
-			const cellStub = env.void_cell.get(cellId);
-			const resp = await cellStub.fetch(`https://cell/${serverId}/rotate-session`, { method: "POST" });
-			const data: any = await resp.json();
-			// Show a simple confirmation page
-			return new Response(
-				`<!doctype html><html><head><meta charset="UTF-8"><title>Session rotated · void</title>
-				<style>body{font-family:-apple-system,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;margin:0}
-				.box{max-width:600px;background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:32px}
-				h1{font-size:1.5rem;margin-bottom:16px}
-				code{background:#1a1a1a;padding:6px 10px;border-radius:6px;display:block;color:#0f0;font-family:ui-monospace,monospace;margin:8px 0;word-break:break-all}
-				.warn{color:#f90;font-size:0.9rem;margin:16px 0;padding:12px;background:#1a0a00;border-radius:6px}
-				a{color:#6cf;display:inline-block;margin-top:16px}</style></head>
-				<body><div class="box">
-				<h1>✓ Session token rotated for ${escapeHtml(serverId)}</h1>
-				<p>New token:</p><code>${escapeHtml((data && data.session_token) || "(error)")}</code>
-				<div class="warn">⚠ The agent has been disconnected. Update <code>&lt;state_dir&gt;/session_token</code> on the agent host with the new token, then restart the agent.</div>
-				<a href="/servers">← Back to servers</a>
-				</div></body></html>`,
-				{ headers: { "content-type": "text/html; charset=utf-8" } },
-			);
-		}
-		if (path === "/projects") {
-			const user = await getSessionUser(env, request);
-			return renderProjectsPage(env, user);
-		}
-		if (path === "/deployments" || path === "/deployments/") {
-			const user = await getSessionUser(env, request);
-			const projectFilter = url.searchParams.get("project");
-			const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
-			const perPage = Math.min(100, Math.max(1, parseInt(url.searchParams.get("per_page") || "20", 10) || 20));
-			return renderDeploymentsPage(env, user, projectFilter, page, perPage);
-		}
-		if (path.startsWith("/deployments/")) {
-			const user = await getSessionUser(env, request);
-			const id = path.slice("/deployments/".length);
-			return renderDeploymentLogsPage(env, user, id);
-		}
-
-		// API
-		if (path === "/api") {
-			return json({
-				endpoints: [
-					"GET /  (landing page)",
-					"GET /health",
-					"POST /mcp (MCP Streamable HTTP)",
-					"WS /cell/:server_id (agent)",
-					"GET /api/servers",
-					"POST /api/servers (real Hetzner or stub)",
-					"GET /api/cell/:server_id/status",
-					"POST /api/webhooks/github (git push → auto-deploy)",
-					"GET /api/auth/github (OAuth start)",
-					"GET /api/auth/callback (OAuth callback)",
-					"GET /api/auth/me (current user)",
-					"GET /api/auth/logout",
-				],
-			});
-		}
-
-		// GitHub webhook
-		if (path === "/api/webhooks/github" && request.method === "POST") {
-			return handleGitHubWebhook(request, env);
-		}
-
-		// All other /api/* and /api/cell/* require Bearer auth
-		if (path.startsWith("/api/")) {
-			const authFail = requireBearer(env, request);
-			if (authFail) return authFail;
-		}
-
-		// Direct REST wrappers around MCP tools (for curl / scripts)
-		if (path === "/api/servers" && request.method === "GET") {
-			const { results } = await env.void_db
-				.prepare("SELECT id, name, provider, status, region, size, last_seen_at FROM servers ORDER BY created_at DESC")
-				.all();
-			return json({ servers: results });
-		}
-
-		if (path === "/api/cell/:server_id/status" || path.startsWith("/api/cell/")) {
-			const m = path.match(/^\/api\/cell\/([^/]+)\/([^/]+)$/);
-			if (m) {
-				const [, serverId, action] = m;
-				const cellId = env.void_cell.idFromName(serverId);
-				const cellStub = env.void_cell.get(cellId);
-				if (action === "status") {
-					return cellStub.fetch("https://cell/status");
-				}
-				if (action === "rotate-session" && request.method === "POST") {
-					return cellStub.fetch(`https://cell/${serverId}/rotate-session`, { method: "POST" });
-				}
-			}
-		}
-
-		return json({ error: "Not found", path }, 404);
-	},
-} satisfies ExportedHandler<Env>;
