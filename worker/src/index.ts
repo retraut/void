@@ -26,10 +26,19 @@ import {
 export { VoidCell };
 
 function json(data: unknown, status = 200): Response {
-	return new Response(JSON.stringify(data, null, 2), {
+	return new Response(JSON.stringify(data), {
 		status,
 		headers: { "content-type": "application/json" },
 	});
+}
+
+function escapeHtml(s: string): string {
+	return s
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
 }
 
 export default {
@@ -149,6 +158,34 @@ export default {
 			const user = await getSessionUser(env, request);
 			return renderServersPage(env, user);
 		}
+		// UI form action: rotate session token
+		const rotateMatch = path.match(/^\/servers\/([^/]+)\/rotate-session$/);
+		if (rotateMatch && request.method === "POST") {
+			const user = await getSessionUser(env, request);
+			if (!user) return new Response("Login required", { status: 401 });
+			const serverId = rotateMatch[1];
+			const cellId = env.void_cell.idFromName(serverId);
+			const cellStub = env.void_cell.get(cellId);
+			const resp = await cellStub.fetch(`https://cell/${serverId}/rotate-session`, { method: "POST" });
+			const data: any = await resp.json();
+			// Show a simple confirmation page
+			return new Response(
+				`<!doctype html><html><head><meta charset="UTF-8"><title>Session rotated · void</title>
+				<style>body{font-family:-apple-system,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;margin:0}
+				.box{max-width:600px;background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:32px}
+				h1{font-size:1.5rem;margin-bottom:16px}
+				code{background:#1a1a1a;padding:6px 10px;border-radius:6px;display:block;color:#0f0;font-family:ui-monospace,monospace;margin:8px 0;word-break:break-all}
+				.warn{color:#f90;font-size:0.9rem;margin:16px 0;padding:12px;background:#1a0a00;border-radius:6px}
+				a{color:#6cf;display:inline-block;margin-top:16px}</style></head>
+				<body><div class="box">
+				<h1>✓ Session token rotated for ${escapeHtml(serverId)}</h1>
+				<p>New token:</p><code>${escapeHtml((data && data.session_token) || "(error)")}</code>
+				<div class="warn">⚠ The agent has been disconnected. Update <code>&lt;state_dir&gt;/session_token</code> on the agent host with the new token, then restart the agent.</div>
+				<a href="/servers">← Back to servers</a>
+				</div></body></html>`,
+				{ headers: { "content-type": "text/html; charset=utf-8" } },
+			);
+		}
 		if (path === "/projects") {
 			const user = await getSessionUser(env, request);
 			return renderProjectsPage(env, user);
@@ -156,7 +193,9 @@ export default {
 		if (path === "/deployments" || path === "/deployments/") {
 			const user = await getSessionUser(env, request);
 			const projectFilter = url.searchParams.get("project");
-			return renderDeploymentsPage(env, user, projectFilter);
+			const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
+			const perPage = Math.min(100, Math.max(1, parseInt(url.searchParams.get("per_page") || "20", 10) || 20));
+			return renderDeploymentsPage(env, user, projectFilter, page, perPage);
 		}
 		if (path.startsWith("/deployments/")) {
 			const user = await getSessionUser(env, request);
@@ -204,11 +243,17 @@ export default {
 		}
 
 		if (path === "/api/cell/:server_id/status" || path.startsWith("/api/cell/")) {
-			const m = path.match(/^\/api\/cell\/([^/]+)\/status$/);
+			const m = path.match(/^\/api\/cell\/([^/]+)\/([^/]+)$/);
 			if (m) {
-				const cellId = env.void_cell.idFromName(m[1]);
+				const [, serverId, action] = m;
+				const cellId = env.void_cell.idFromName(serverId);
 				const cellStub = env.void_cell.get(cellId);
-				return cellStub.fetch("https://cell/status");
+				if (action === "status") {
+					return cellStub.fetch("https://cell/status");
+				}
+				if (action === "rotate-session" && request.method === "POST") {
+					return cellStub.fetch(`https://cell/${serverId}/rotate-session`, { method: "POST" });
+				}
 			}
 		}
 

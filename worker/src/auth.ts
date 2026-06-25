@@ -344,6 +344,21 @@ export function renderLandingHtml(opts: {
     <code><span class="method post">POST</span>/mcp — MCP Streamable HTTP endpoint</code>
     <code>tools: void_list_servers, void_create_server, void_deploy, void_get_logs, void_teardown, void_register_project, void_ping_agent</code>
   </div>
+
+  <div class="endpoints" style="margin-top:16px">
+    <h3>Connect your AI — paste into Claude Desktop / Cursor / Cline</h3>
+    <code>{
+  "mcpServers": {
+    "void": {
+      "url": "https://void.retraut.workers.dev/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_BEARER_TOKEN"
+      }
+    }
+  }
+}</code>
+    <p style="color:#666;font-size:0.8rem;margin-top:8px">Set <code>VOID_BEARER_TOKEN</code> via <code>wrangler secret put VOID_BEARER_TOKEN</code> (use <code>openssl rand -hex 32</code>). Restart your AI client to load the MCP server.</p>
+  </div>
 </div>
 </body>
 </html>`;

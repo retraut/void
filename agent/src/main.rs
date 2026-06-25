@@ -22,6 +22,7 @@ use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValu
 use tracing::{debug, error, info, warn};
 
 mod config;
+mod detect;
 mod keys;
 
 use config::Config;
@@ -461,8 +462,29 @@ async fn run_deploy(
     }
     emit_log(&mut line_no, &deployment_id, ws, "stdout", "→ ✓ clone complete\n".to_string()).await;
 
+    // Auto-detect project type if build_command / serve_command not provided
+    let port_in = params.port.unwrap_or(0);
+    let (build_cmd, serve_cmd, port_eff) = if params.build_command.is_none() || params.serve_command.is_none() || port_in == 0 {
+        let detected = detect::detect(&params.build_dir);
+        emit_log(
+            &mut line_no,
+            &deployment_id,
+            ws,
+            "stdout",
+            format!("→ 🔍 auto-detected framework: {}\n", detected.framework),
+        )
+        .await;
+        (
+            params.build_command.clone().or(detected.build_command),
+            params.serve_command.clone().or(detected.serve_command),
+            if port_in == 0 { detected.port } else { port_in },
+        )
+    } else {
+        (params.build_command.clone(), params.serve_command.clone(), port_in)
+    };
+
     // build
-    if let Some(cmd) = &params.build_command {
+    if let Some(cmd) = &build_cmd {
         emit_log(
             &mut line_no,
             &deployment_id,
@@ -505,8 +527,8 @@ async fn run_deploy(
     }
 
     // serve
-    if let Some(cmd) = &params.serve_command {
-        let port = params.port.unwrap_or(3000);
+    if let Some(cmd) = &serve_cmd {
+        let port = port_eff;
         let local_url = format!("http://127.0.0.1:{}", port);
         emit_log(
             &mut line_no,
@@ -586,28 +608,68 @@ async fn run_deploy(
         // Forward log lines to ws (in this function scope — no lifetime issues)
         drain_serve_logs_to_ws(&deployment_id, &mut line_no, &mut rx, ws).await;
 
-        sleep(Duration::from_millis(1500)).await;
+        // Health check with 10s grace period. Poll every 500ms.
+        // If we never see a 2xx, treat as failed start and kill the process.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut healthy = false;
+        let mut last_err: Option<String> = None;
+        while tokio::time::Instant::now() < deadline {
+            match check_health(&local_url).await {
+                Ok(()) => {
+                    healthy = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
 
-        let healthy = check_health(&local_url).await;
         if !healthy {
             emit_log(
                 &mut line_no,
                 &deployment_id,
                 ws,
                 "stderr",
-                format!("warning: serve not responding on {} yet\n", local_url),
+                format!(
+                    "✗ health check FAILED: serve not responding on {} after 10s (last err: {})\n",
+                    local_url,
+                    last_err.unwrap_or_else(|| "none".to_string())
+                ),
             )
             .await;
-        } else {
             emit_log(
                 &mut line_no,
                 &deployment_id,
                 ws,
-                "stdout",
-                format!("→ ✓ serve alive on {}\n", local_url),
+                "stderr",
+                "→ killing serve process and rolling back deploy\n".to_string(),
             )
             .await;
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            emit_done(
+                &deployment_id,
+                ws,
+                "failed",
+                None,
+                Some(local_url.clone()),
+                Some("health check failed: serve did not respond 2xx within 10s".to_string()),
+            )
+            .await;
+            info!(deployment_id = %deployment_id, "✗ deploy failed (health check timeout)");
+            return;
         }
+
+        emit_log(
+            &mut line_no,
+            &deployment_id,
+            ws,
+            "stdout",
+            format!("→ ✓ serve alive on {}\n", local_url),
+        )
+        .await;
 
         let public_url = params
             .public_url
@@ -920,17 +982,15 @@ async fn stream_child_to_ws(
     }
 }
 
-async fn check_health(url: &str) -> bool {
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
+async fn check_health(url: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
         .build()
-    {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
+        .map_err(|e| format!("client build: {}", e))?;
     match client.get(url).send().await {
-        Ok(r) => r.status().is_success() || r.status().is_redirection(),
-        Err(_) => false,
+        Ok(r) if r.status().is_success() || r.status().is_redirection() => Ok(()),
+        Ok(r) => Err(format!("HTTP {}", r.status())),
+        Err(e) => Err(format!("{}", e)),
     }
 }
 

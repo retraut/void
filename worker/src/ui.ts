@@ -62,6 +62,11 @@ function html(content: string, title: string, opts: { user?: { username: string;
   .live{color:#0f0;font-size:0.85rem}
   .live::before{content:"●";margin-right:4px;animation:pulse 1.5s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+  .pager{display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:12px 4px;font-size:0.9rem}
+  .pager a{color:#6cf;padding:4px 10px;border:1px solid #333;border-radius:6px;text-decoration:none}
+  .pager a:hover{background:#1a1a1a}
+  .btn-danger{background:#1a0a0a;color:#f44;border-color:#533}
+  .btn-danger:hover{background:#2a0a0a;border-color:#f44}
 </style>
 </head>
 <body>
@@ -126,7 +131,7 @@ ${results.length === 0
 	: `<div class="card"><table>
 		<thead><tr>
 			<th>Name</th><th>ID</th><th>Provider</th><th>Region</th><th>Size</th>
-			<th>Status</th><th>Tunnel</th><th>Deploys</th><th>Last seen</th>
+			<th>Status</th><th>Tunnel</th><th>Deploys</th><th>Last seen</th><th></th>
 		</tr></thead>
 		<tbody>
 		${results
@@ -142,6 +147,11 @@ ${results.length === 0
 				<td>${s.has_tunnel ? "✓" : "—"}</td>
 				<td>${s.deployment_count}</td>
 				<td class="meta">${timeAgo(s.last_seen_at)}</td>
+				<td>
+					<form method="POST" action="/servers/${escape(s.id)}/rotate-session" style="display:inline" onsubmit="return confirm('Rotate session token for ${escape(s.name)}? The agent will be disconnected and must re-register with the new token.')">
+						<button class="btn btn-secondary" type="submit" style="padding:4px 10px;font-size:0.8rem">rotate</button>
+					</form>
+				</td>
 			</tr>`,
 			)
 			.join("")}
@@ -202,20 +212,34 @@ export async function renderDeploymentsPage(
 	env: Env,
 	user: { username: string; avatar_url: string | null } | null,
 	projectFilter: string | null,
+	page: number = 1,
+	perPage: number = 20,
 ): Promise<Response> {
+	const offset = (page - 1) * perPage;
+
+	// Total count for pagination
+	const countQuery = projectFilter
+		? "SELECT COUNT(*) AS n FROM deployments WHERE project_id = ?"
+		: "SELECT COUNT(*) AS n FROM deployments";
+	const countRow = projectFilter
+		? await env.void_db.prepare(countQuery).bind(projectFilter).first<{ n: number }>()
+		: await env.void_db.prepare(countQuery).first<{ n: number }>();
+	const total = countRow?.n || 0;
+	const totalPages = Math.max(1, Math.ceil(total / perPage));
+
 	const query = projectFilter
 		? `SELECT d.id, d.ref, d.status, d.started_at, d.finished_at, d.duration_ms, d.hostname, d.public_url, d.commit_sha,
 		        p.name AS project_name, p.slug AS project_slug, s.name AS server_name
 		 FROM deployments d LEFT JOIN projects p ON p.id = d.project_id LEFT JOIN servers s ON s.id = d.server_id
-		 WHERE d.project_id = ? ORDER BY d.started_at DESC LIMIT 100`
+		 WHERE d.project_id = ? ORDER BY d.started_at DESC LIMIT ? OFFSET ?`
 		: `SELECT d.id, d.ref, d.status, d.started_at, d.finished_at, d.duration_ms, d.hostname, d.public_url, d.commit_sha,
 		        p.name AS project_name, p.slug AS project_slug, s.name AS server_name
 		 FROM deployments d LEFT JOIN projects p ON p.id = d.project_id LEFT JOIN servers s ON s.id = d.server_id
-		 ORDER BY d.started_at DESC LIMIT 100`;
+		 ORDER BY d.started_at DESC LIMIT ? OFFSET ?`;
 
 	const stmt = projectFilter
-		? env.void_db.prepare(query).bind(projectFilter)
-		: env.void_db.prepare(query);
+		? env.void_db.prepare(query).bind(projectFilter, perPage, offset)
+		: env.void_db.prepare(query).bind(perPage, offset);
 	const { results } = await stmt.all<{
 		id: string; ref: string; status: string; started_at: number; finished_at: number | null;
 		duration_ms: number | null; hostname: string | null; public_url: string | null; commit_sha: string | null;
@@ -249,7 +273,13 @@ ${results.length === 0
 			)
 			.join("")}
 		</tbody>
-	</table></div>`}`;
+	</table></div>
+
+	<div class="pager">
+		<span class="meta">${total} deployment${total === 1 ? "" : "s"} • page ${page} of ${totalPages}</span>
+		${page > 1 ? `<a href="?${projectFilter ? `project=${escape(projectFilter)}&` : ""}page=${page - 1}&per_page=${perPage}">← prev</a>` : ""}
+		${page < totalPages ? `<a href="?${projectFilter ? `project=${escape(projectFilter)}&` : ""}page=${page + 1}&per_page=${perPage}">next →</a>` : ""}
+	</div>`}`;
 	return html(body, "Deployments", { user });
 }
 

@@ -145,6 +145,31 @@ export class VoidCell {
 			});
 		}
 
+		// Internal: rotate session_token (invalidates the old one)
+		if (url.pathname.endsWith("/rotate-session") && request.method === "POST") {
+			const newToken = `sess_${crypto.randomUUID().replace(/-/g, "")}`;
+			const now = Math.floor(Date.now() / 1000);
+			const serverIdFromUrl = url.pathname.match(/^\/cell\/([^/]+)\/rotate-session$/)?.[1] || this.serverId;
+			if (!serverIdFromUrl) {
+				return Response.json({ error: "no server_id" }, { status: 400 });
+			}
+			await this.env.void_db
+				.prepare(
+					"UPDATE servers SET session_token = ?, session_token_created_at = ? WHERE id = ?",
+				)
+				.bind(newToken, now, serverIdFromUrl)
+				.run();
+			// Disconnect the current WS so the agent must re-register with the new token
+			try { this.ws?.close(1000, "session_token rotated"); } catch {}
+			this.ws = null;
+			this.registered = false;
+			return Response.json({
+				ok: true,
+				session_token: newToken,
+				note: "Agent must re-register with this new session_token. Update <state_dir>/session_token on the agent host.",
+			});
+		}
+
 		return new Response("Not found in cell", { status: 404 });
 	}
 

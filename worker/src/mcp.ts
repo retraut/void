@@ -63,20 +63,20 @@ const TOOLS = [
 	{
 		name: "void_deploy",
 		description:
-			"Trigger a deployment on a server. Sends a deploy command to the connected agent over WebSocket. The agent clones the repo, runs the build, starts the serve, and (if cloudflared is installed + CF_API_TOKEN is set) makes the app publicly accessible via a wildcard tunnel + DNS record.",
+			"Trigger a deployment. Pass `project_id` (from a previously registered project) for one-call deploys — server, repo, ref, build, and serve commands are all auto-resolved from the project. Alternatively, pass `server_id` + `repo_url` directly for ad-hoc deploys. The agent clones the repo, runs the build, starts the serve, and (if cloudflared + CF_API_TOKEN are set) makes the app publicly accessible via a wildcard tunnel + DNS record.",
 		inputSchema: {
 			type: "object",
 			properties: {
-				server_id: { type: "string", description: "Target server (from void_list_servers)" },
-				repo_url: { type: "string", description: "Git URL, e.g. 'https://github.com/owner/repo'" },
-				ref: { type: "string", description: "Branch / tag / commit SHA. Default: 'main'", default: "main" },
+				project_id: { type: "string", description: "Project ID (from void_register_project). If set, server_id/repo_url/ref/build_command/serve_command/port are all auto-resolved from the project. RECOMMENDED." },
+				server_id: { type: "string", description: "Target server (from void_list_servers). Required if project_id not set." },
+				repo_url: { type: "string", description: "Git URL, e.g. 'https://github.com/owner/repo'. Required if project_id not set." },
+				ref: { type: "string", description: "Branch / tag / commit SHA. Default: project's default_branch or 'main'.", default: "main" },
 				env: { type: "object", description: "Env vars as key-value", additionalProperties: { type: "string" } },
-				build_command: { type: "string", description: "Shell command to run after clone. Default: skip." },
-				serve_command: { type: "string", description: "Shell command to run in background after build. Default: no serve." },
-				port: { type: "integer", description: "Local port the serve_command listens on. Default: 3000.", default: 3000 },
+				build_command: { type: "string", description: "Override project's build_command. Default: project value or skip." },
+				serve_command: { type: "string", description: "Override project's serve_command. Default: project value or skip." },
+				port: { type: "integer", description: "Override project's port. Default: 3000.", default: 3000 },
 				hostname: { type: "string", description: "Custom public hostname (without zone). Default: auto-generated from deployment_id." },
 			},
-			required: ["server_id", "repo_url"],
 		},
 	},
 	{
@@ -323,24 +323,79 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 				}
 
 				case "void_deploy": {
-					const serverId = args.server_id as string;
+					const projectId = args.project_id as string | undefined;
 					const deploymentId = `dep_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
+					// Resolve effective deploy params: project_id takes precedence, but
+					// explicit args override the project defaults.
+					let serverId = args.server_id as string | undefined;
+					let repoUrl = args.repo_url as string | undefined;
+					let ref = (args.ref as string) || "main";
+					let buildCommand = args.build_command as string | undefined;
+					let serveCommand = args.serve_command as string | undefined;
+					let port = (args.port as number) || 3000;
+					let projectSlug: string | null = null;
+
+					if (projectId) {
+						const project = await env.void_db
+							.prepare(
+								"SELECT id, slug, server_id, repo_url, default_branch, default_port, build_command, serve_command FROM projects WHERE id = ?",
+							)
+							.bind(projectId)
+							.first<{
+								id: string;
+								slug: string;
+								server_id: string;
+								repo_url: string;
+								default_branch: string;
+								default_port: number;
+								build_command: string | null;
+								serve_command: string | null;
+							}>();
+						if (!project) {
+							return Response.json(
+								rpcErr(
+									id,
+									-32000,
+									`Project ${projectId} not found. Use void_list_servers → projects to see registered projects.`,
+								)
+							);
+						}
+						serverId = serverId || project.server_id;
+						repoUrl = repoUrl || project.repo_url;
+						ref = (args.ref as string) || project.default_branch;
+						port = (args.port as number) || project.default_port;
+						buildCommand = buildCommand || (project.build_command ?? undefined);
+						serveCommand = serveCommand || (project.serve_command ?? undefined);
+						projectSlug = project.slug;
+					}
+
+					if (!serverId) {
+						return Response.json(
+							rpcErr(id, -32004, "Missing server_id. Pass either `project_id` or `server_id`."),
+						);
+					}
+					if (!repoUrl) {
+						return Response.json(
+							rpcErr(id, -32002, "Missing repo_url. Pass either `project_id` or `repo_url`."),
+						);
+					}
+
 					// Validate inputs (defense in depth)
-					const refCheck = validateRef((args.ref as string) || "main");
+					const refCheck = validateRef(ref);
 					if (!refCheck.ok) {
 						return Response.json(rpcErr(id, -32001, `invalid ref: ${refCheck.reason}`));
 					}
-					const urlCheck = validateRepoUrl((args.repo_url as string) || "");
+					const urlCheck = validateRepoUrl(repoUrl);
 					if (!urlCheck.ok) {
 						return Response.json(rpcErr(id, -32002, `invalid repo_url: ${urlCheck.reason}`));
 					}
-					if (args.build_command) {
-						const c = validateShellCommand(args.build_command as string, "build_command");
+					if (buildCommand) {
+						const c = validateShellCommand(buildCommand, "build_command");
 						if (!c.ok) return Response.json(rpcErr(id, -32003, `build_command: ${c.reason}`));
 					}
-					if (args.serve_command) {
-						const c = validateShellCommand(args.serve_command as string, "serve_command");
+					if (serveCommand) {
+						const c = validateShellCommand(serveCommand, "serve_command");
 						if (!c.ok) return Response.json(rpcErr(id, -32003, `serve_command: ${c.reason}`));
 					}
 
@@ -414,8 +469,6 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 
 						// 2. Compute hostname
 						hostname = (args.hostname as string) || `pr-${deploymentId}`;
-						// 3. Upsert ingress
-						const port = (args.port as number) || 3000;
 						try {
 							await upsertIngressRule(
 								env.CF_API_TOKEN,
@@ -459,18 +512,19 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 					const now = Math.floor(Date.now() / 1000);
 					await env.void_db
 						.prepare(
-							`INSERT INTO deployments (id, server_id, ref, status, started_at, hostname, public_url, dns_record_id, port)
-							 VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+							`INSERT INTO deployments (id, project_id, server_id, ref, status, started_at, hostname, public_url, dns_record_id, port)
+							 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
 						)
 						.bind(
 							deploymentId,
+							projectId || null,
 							serverId,
-							args.ref || "main",
+							ref,
 							now,
 							hostname,
 							publicUrl,
 							dnsRecordId,
-							(args.port as number) || 3000,
+							port,
 						)
 						.run();
 
@@ -482,12 +536,12 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 						headers: { "content-type": "application/json" },
 						body: JSON.stringify({
 							deployment_id: deploymentId,
-							repo_url: args.repo_url,
-							ref: args.ref || "main",
+							repo_url: urlCheck.normalized,
+							ref,
 							env: args.env || {},
-							build_command: args.build_command || null,
-							serve_command: args.serve_command || null,
-							port: (args.port as number) || 3000,
+							build_command: buildCommand || null,
+							serve_command: serveCommand || null,
+							port,
 							hostname,
 							public_url: publicUrl,
 							tunnel_token: tunnelToken,
@@ -505,12 +559,14 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 									text: JSON.stringify(
 										{
 											deployment_id: deploymentId,
+											project_id: projectId || null,
+											project_slug: projectSlug,
 											server_id: serverId,
-											repo_url: args.repo_url,
-											ref: args.ref || "main",
-											build_command: args.build_command || "(skipped)",
-											serve_command: args.serve_command || "(skipped)",
-											port: (args.port as number) || 3000,
+											repo_url: urlCheck.normalized,
+											ref,
+											build_command: buildCommand || "(skipped)",
+											serve_command: serveCommand || "(skipped)",
+											port,
 											hostname,
 											public_url: publicUrl,
 											dns_record_id: dnsRecordId,
