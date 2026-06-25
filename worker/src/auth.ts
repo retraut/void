@@ -509,7 +509,7 @@ export function renderLandingHtml(opts: {
 <body>
 <div class="wrap">
   ${topRight}
-  <h1>deployed <span>into the void</span></h1>
+  <h1>ship to <span>the void</span></h1>
   <div class="taglines" aria-live="polite">
     <span class="tagline t1">Self-hosted, edge-driven PaaS. Best-in-class DX, Hetzner pricing, no SSH. AI-deploys via MCP.</span>
     <span class="tagline t2">your AI writes the code. void ships it.</span>
