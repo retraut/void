@@ -22,6 +22,7 @@ import {
 	deleteServer as hetznerDeleteServer,
 } from "./hetzner";
 import { validateRef, validateRepoUrl, validateShellCommand } from "./security";
+import { getProviderToken } from "./credentials";
 import { encrypt, decrypt } from "./crypto";
 
 interface JsonRpcRequest {
@@ -142,7 +143,9 @@ function rpcErr(id: JsonRpcRequest["id"], code: number, message: string, data?: 
 	return { jsonrpc: "2.0", id: id ?? null, error: { code, message, data } };
 }
 
-export async function handleMcp(request: Request, env: Env): Promise<Response> {
+export async function handleMcp(c: any): Promise<Response> {
+	const request = c.req.raw;
+	const env = c.env;
 	if (request.method !== "POST") {
 		return new Response("MCP requires POST", { status: 405 });
 	}
@@ -196,8 +199,17 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 					const serverId = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 					const now = Math.floor(Date.now() / 1000);
 
+					// Per-user Hetzner credential (preferred) → fallback to env
+					let hetznerToken: string | null = null;
+					if (provider === "hetzner") {
+						const user = c.get?.("user");
+						if (user?.id) {
+							hetznerToken = await getProviderToken(env, user.id, "hetzner");
+						}
+					}
+
 					// Stub mode: no provider, just insert a row
-					if (provider === "stub" || !env.HETZNER_TOKEN) {
+					if (provider === "stub" || !hetznerToken) {
 						await env.void_db
 							.prepare(
 								`INSERT INTO servers (id, name, provider, region, size, status, created_at)
@@ -218,9 +230,9 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 												region,
 												size,
 												status: "provisioning",
-												note: env.HETZNER_TOKEN
+												note: hetznerToken
 													? "Stub mode (provider=stub) — no Hetzner VM provisioned"
-													: "HETZNER_TOKEN not configured — inserted stub row. Set the secret for real provisioning.",
+													: "No Hetzner API token — go to /settings to add one (per-user), or pass provider=stub. Falls back to env HETZNER_TOKEN for self-hosted setups.",
 											},
 											null,
 											2
@@ -265,7 +277,7 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
 					});
 
 					try {
-						const hs = await hetznerCreateServer(env.HETZNER_TOKEN, {
+						const hs = await hetznerCreateServer(hetznerToken as string, {
 							name: `void-${serverId.slice(0, 12)}`,
 							server_type: size,
 							image,
