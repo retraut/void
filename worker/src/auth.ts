@@ -449,7 +449,6 @@ export function renderLandingHtml(opts: {
     display:flex;align-items:center;justify-content:center;
     padding:24px;
     position:relative;
-    overflow:hidden;
   }
   /* Glass slab — radial gradient makes the background feel like a
      frosted glass panel in the dark, lighter on the upper-left, fading
