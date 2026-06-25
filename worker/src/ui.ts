@@ -212,6 +212,18 @@ function html(
   .settings-row .label small{display:block;color:#666;font-size:0.8rem;margin-top:2px}
   .settings-row .value{color:#888;font-family:ui-monospace,monospace;font-size:0.85rem}
 
+  /* Toast (top of page, auto-dismiss) */
+  .toast{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:10px;margin-bottom:24px;font-size:0.9rem;animation:toast-in 280ms cubic-bezier(.34,1.56,.64,1) both;box-shadow:0 4px 20px rgba(0,0,0,0.4)}
+  .toast-success{background:#0a3320;border:1px solid #1f6b3d;color:#0f0}
+  .toast-error{background:#330a0a;border:1px solid #6b1f1f;color:#f55}
+  @keyframes toast-in{from{transform:translateY(-12px);opacity:0}to{transform:translateY(0);opacity:1}}
+  .toast-icon{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;font-weight:700;flex-shrink:0}
+  .toast-success .toast-icon{background:#1f6b3d;color:#fff}
+  .toast-error .toast-icon{background:#6b1f1f;color:#fff}
+  .toast-msg{flex:1;line-height:1.4}
+  .toast-close{background:transparent;border:0;color:inherit;opacity:0.5;cursor:pointer;font-size:1.2rem;line-height:1;padding:4px 8px;border-radius:4px;transition:opacity 0.15s}
+  .toast-close:hover{opacity:1;background:rgba(255,255,255,0.05)}
+
   /* Mobile: collapse sidebar to top bar */
   @media (max-width: 768px) {
     .sidebar{position:static;width:100%;flex-direction:row;padding:12px;gap:12px;border-right:0;border-bottom:1px solid #1a1a1a}
@@ -725,6 +737,7 @@ export async function renderDashboardPage(
 export async function renderSettingsPage(
 	c: any,
 	user: { id: string; username: string; avatar_url: string | null } | null,
+	flash: { kind: string | null; msg: string | null } = { kind: null, msg: null },
 ): Promise<Response> {
 	const env = c.env;
 	const { getCurrentProject } = await import("./state");
@@ -733,6 +746,16 @@ export async function renderSettingsPage(
 		.prepare("SELECT id, name, slug FROM projects WHERE user_id = ? ORDER BY created_at DESC")
 		.bind(user.id)
 		.all<{ id: string; name: string; slug: string }>() : { results: [] };
+
+	// Flash toast (rendered at top, auto-dismisses after 4s)
+	const toast = flash.kind && flash.msg
+		? `<div class="toast toast-${escape(flash.kind)}" id="toast">
+			<span class="toast-icon">${flash.kind === "success" ? "✓" : "✕"}</span>
+			<span class="toast-msg">${escape(flash.msg)}</span>
+			<button type="button" class="toast-close" onclick="document.getElementById('toast').remove()" aria-label="Dismiss">×</button>
+		</div>
+		<script>setTimeout(function(){var t=document.getElementById('toast');if(t)t.remove()},4000)</script>`
+		: "";
 
 	// Look up full user record for accurate info
 	const fullUser = user
@@ -750,6 +773,7 @@ export async function renderSettingsPage(
 	const hetznerCred = creds.find((c) => c.provider === "hetzner");
 
 	const body = `
+${toast}
 <h1>Settings</h1>
 
 <div class="card">

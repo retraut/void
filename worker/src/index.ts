@@ -321,7 +321,11 @@ app.get("/deployments/:id", requireSession, async (c) => {
 });
 
 app.get("/settings", requireSession, async (c) => {
-	return renderSettingsPage(c, c.get("user"));
+	const flash = {
+		kind: c.req.query("toast") || null,
+		msg: c.req.query("msg") || null,
+	};
+	return renderSettingsPage(c, c.get("user"), flash);
 });
 
 // Project switcher — sets the current_project_id cookie based on dropdown selection.
@@ -345,18 +349,18 @@ app.post("/settings/hetzner", requireSession, async (c) => {
 	const { setProviderToken } = await import("./credentials");
 	const form = await c.req.parseBody();
 	const token = (form as Record<string, string>)["token"]?.trim();
-	if (!token) return c.text("missing token", 400);
+	if (!token) return c.redirect("/settings?toast=error&msg=missing+token");
 	if (!/^hcloud_[A-Za-z0-9_-]{20,}$/.test(token)) {
-		return c.text("invalid Hetzner token format (expected hcloud_...)", 400);
+		return c.redirect("/settings?toast=error&msg=invalid+Hetzner+token+format+%28expected+hcloud_...%29");
 	}
 	await setProviderToken(c.env, c.get("user").id, "hetzner", token);
-	return c.redirect("/settings");
+	return c.redirect("/settings?toast=success&msg=Hetzner+token+saved");
 });
 
 app.post("/settings/hetzner/delete", requireSession, async (c) => {
 	const { deleteProviderToken } = await import("./credentials");
 	await deleteProviderToken(c.env, c.get("user").id, "hetzner");
-	return c.redirect("/settings");
+	return c.redirect("/settings?toast=success&msg=Hetzner+token+deleted");
 });
 
 // UI form action: rotate session token (POST from the rotate button)
