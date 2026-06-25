@@ -808,12 +808,44 @@ ${toast}
 					<form method="POST" action="/settings/hetzner/delete" style="margin-top:8px" onsubmit="return confirm('Delete Hetzner API token? New server creates will fall back to env HETZNER_TOKEN if set, otherwise use stub mode.')">
 						<button type="submit" class="btn btn-secondary" style="padding:6px 12px;font-size:0.85rem">Delete token</button>
 					</form>`
-					: `<form method="POST" action="/settings/hetzner" style="display:flex;gap:8px">
-							<input type="password" name="token" placeholder="hcloud_xxxxxxxxxxxxxxxx" required style="flex:1;padding:8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-family:ui-monospace,monospace;font-size:0.85rem">
-							<button type="submit" class="btn btn-primary" style="padding:8px 14px">Save</button>
+					: `<form method="POST" action="/settings/hetzner" id="hetzner-form" style="display:flex;gap:8px;align-items:flex-start">
+							<div style="flex:1;position:relative">
+								<input type="password" name="token" id="hetzner-token" placeholder="hcloud_xxxxxxxxxxxxxxxx" autocomplete="off" spellcheck="false" style="width:100%;padding:8px 32px 8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-family:ui-monospace,monospace;font-size:0.85rem;box-sizing:border-box">
+								<span id="hetzner-check" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:0.9rem;pointer-events:none;display:none"></span>
+							</div>
+							<button type="submit" id="hetzner-submit" class="btn btn-primary" style="padding:8px 14px" disabled>Save</button>
 						</form>
-						<small style="display:block;margin-top:6px;color:#666">Get a token at <a href="https://console.hetzner.cloud" target="_blank" rel="noopener" style="color:#6cf">console.hetzner.cloud</a> → Security → API Tokens</small>
-						${env.HETZNER_TOKEN ? `<small style="display:block;margin-top:8px;color:#666">Tip: env HETZNER_TOKEN is also set as a fallback for this deployment.</small>` : ""}`
+						<small id="hetzner-error" style="display:block;margin-top:6px;color:#f55;min-height:1em;font-size:0.8rem"></small>
+						<small id="hetzner-hint" style="display:block;margin-top:6px;color:#666">Get a token at <a href="https://console.hetzner.cloud" target="_blank" rel="noopener" style="color:#6cf">console.hetzner.cloud</a> → Security → API Tokens</small>
+						${env.HETZNER_TOKEN ? `<small style="display:block;margin-top:8px;color:#666">Tip: env HETZNER_TOKEN is also set as a fallback for this deployment.</small>` : ""}
+						<script>
+						(function(){
+							var input = document.getElementById('hetzner-token');
+							var submit = document.getElementById('hetzner-submit');
+							var check = document.getElementById('hetzner-check');
+							var error = document.getElementById('hetzner-error');
+							var form = document.getElementById('hetzner-form');
+							var pattern = /^hcloud_[A-Za-z0-9_-]{20,}$/;
+							function validate(){
+								var v = input.value.trim();
+								if(!v){submit.disabled=true;check.style.display='none';input.style.borderColor='#333';error.textContent='';return}
+								if(pattern.test(v)){
+									submit.disabled=false;check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
+									input.style.borderColor='#1f6b3d';error.textContent='';
+								} else {
+									submit.disabled=true;
+									input.style.borderColor='#6b1f1f';
+									if(v.length<27) error.textContent='Token too short (expected hcloud_ + 20+ chars)';
+									else if(!v.startsWith('hcloud_')) error.textContent='Must start with hcloud_';
+									else error.textContent='Invalid characters in token';
+								}
+							}
+							input.addEventListener('input', validate);
+							form.addEventListener('submit', function(e){
+								if(!pattern.test(input.value.trim())){e.preventDefault();input.focus();return false}
+							});
+						})();
+						</script>`
 			}
 		</div>
 	</div>
