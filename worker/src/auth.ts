@@ -260,6 +260,26 @@ export function renderLandingHtml(opts: {
 			`<li><span class="dot ${f.on ? "on" : "off"}"></span>${f.name} <code>${escapeHtml(f.missing)}</code></li>`,
 	).join("");
 
+	// Banner shown when GitHub OAuth is not properly configured (placeholder values)
+	// or when a real value is set. Tells the user exactly what to do.
+	const oauthBanner = opts.installed
+		? ""
+		: `<div class="banner">
+			<strong>GitHub OAuth not configured.</strong>
+			The placeholder <code>GITHUB_CLIENT_ID</code> / <code>GITHUB_CLIENT_SECRET</code> from <code>wrangler.jsonc</code> is in use — clicking "Get started" will 404.
+			<br><br>
+			<strong>Fix:</strong> create an OAuth app at
+			<a href="https://github.com/settings/developers" target="_blank" rel="noopener">github.com/settings/developers</a>
+			(callback: <code>${escapeHtml("https://void.retraut.workers.dev/api/auth/callback")}</code>),
+			then run:
+			<br><br>
+			<code>cd worker && npx wrangler secret put GITHUB_CLIENT_ID</code>
+			<br>
+			<code>npx wrangler secret put GITHUB_CLIENT_SECRET</code>
+			<br>
+			<code>npx wrangler secret put COOKIE_SECRET</code> &nbsp;<span style="color:#666">(any random 32+ char string)</span>
+		</div>`;
+
 	// Octocat (GitHub Mark) — single inline SVG, white on dark.
 	// viewBox 16x16 scales cleanly to any size.
 	const octocat = `<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>`;
@@ -316,6 +336,10 @@ export function renderLandingHtml(opts: {
   .endpoints .method{display:inline-block;padding:1px 6px;border-radius:3px;font-size:0.7rem;margin-right:8px;background:#222;color:#888}
   .endpoints .method.get{background:#0a3320;color:#0f0}
   .endpoints .method.post{background:#33220a;color:#f90}
+  .banner{background:#1a0a00;border:1px solid #532;color:#f90;padding:16px 20px;border-radius:8px;margin-bottom:24px;font-size:0.9rem;line-height:1.5}
+  .banner strong{color:#fff}
+  .banner code{background:#000;color:#0f0;padding:2px 6px;border-radius:4px;font-family:ui-monospace,monospace;font-size:0.85em}
+  .banner a{color:#6cf}
 </style>
 </head>
 <body>
@@ -336,6 +360,8 @@ export function renderLandingHtml(opts: {
   </div>
 
   <div id="panel"></div>
+
+  ${oauthBanner}
 
   <div class="features">
     <h3>Configuration status</h3>

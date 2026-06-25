@@ -182,14 +182,25 @@ app.all("/api/cell/:serverId", async (c) => forwardToCell(c, c.req.param("server
 
 app.get("/", async (c) => {
 	const user = await getSessionUser(c.env, c.req.raw);
+	const env = c.env;
 	const html = renderLandingHtml({
 		user,
-		installed: !!c.env.GITHUB_CLIENT_ID,
-		cf_tunnel: !!c.env.CF_API_TOKEN,
-		github_webhook: !!c.env.GITHUB_WEBHOOK_SECRET,
+		installed: isConfigured(env.GITHUB_CLIENT_ID) && isConfigured(env.GITHUB_CLIENT_SECRET),
+		cf_tunnel: isConfigured(env.CF_API_TOKEN),
+		github_webhook: isConfigured(env.GITHUB_WEBHOOK_SECRET),
 	});
 	return c.html(html);
 });
+
+/**
+ * True if the value is set AND not a placeholder string from wrangler.jsonc.
+ * Placeholders look like "REPLACE_WITH_..." — they're set (truthy) but useless.
+ */
+const isConfigured = (v: string | undefined): boolean => {
+	if (!v) return false;
+	if (v.startsWith("REPLACE_WITH_")) return false;
+	return true;
+};
 
 app.get("/health", (c) => {
 	const env = c.env;
@@ -206,10 +217,10 @@ app.get("/health", (c) => {
 			do: !!env.void_cell,
 		},
 		features: {
-			github_oauth: !!env.GITHUB_CLIENT_ID && !!env.GITHUB_CLIENT_SECRET,
-			github_webhook: !!env.GITHUB_WEBHOOK_SECRET,
-			cf_tunnel: !!env.CF_API_TOKEN,
-			hetzner: !!env.HETZNER_TOKEN,
+			github_oauth: isConfigured(env.GITHUB_CLIENT_ID) && isConfigured(env.GITHUB_CLIENT_SECRET),
+			github_webhook: isConfigured(env.GITHUB_WEBHOOK_SECRET),
+			cf_tunnel: isConfigured(env.CF_API_TOKEN),
+			hetzner: isConfigured(env.HETZNER_TOKEN),
 		},
 	});
 });
