@@ -290,13 +290,13 @@ function authInterstitial(opts: {
 	const title =
 		opts.kind === "login"
 			? `Welcome back, @${opts.username}`
-			: "See you in the void";
+			: "Signed out";
 	const subtitle =
 		opts.kind === "login"
-			? "Returning to the void."
+			? "Signed in via GitHub"
 			: "The void will be empty without you.";
 	const tagline =
-		opts.kind === "login" ? "entering the void…" : "returning to nothing…";
+		opts.kind === "login" ? "almost there…" : "on the way out…";
 	const avatar =
 		opts.avatarUrl && opts.kind === "login"
 			? `<img class="avatar" src="${opts.avatarUrl}" alt="">`
