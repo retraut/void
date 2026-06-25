@@ -15,12 +15,8 @@ import {
 	findDnsRecord,
 	deleteDnsRecord,
 } from "./cf";
-import {
-	buildCloudInit,
-	createServer as hetznerCreateServer,
-	getServer as hetznerGetServer,
-	deleteServer as hetznerDeleteServer,
-} from "./hetzner";
+import { getServer as hetznerGetServer, deleteServer as hetznerDeleteServer } from "./hetzner";
+import { createServerForUser } from "./server-create";
 import { validateRef, validateRepoUrl, validateShellCommand } from "./security";
 import { getProviderToken } from "./credentials";
 import { encrypt, decrypt } from "./crypto";
@@ -196,105 +192,25 @@ export async function handleMcp(c: any): Promise<Response> {
 					const region = (args.region as string) || "fsn1";
 					const size = (args.size as string) || "cx22";
 					const image = (args.image as string) || "ubuntu-24.04";
-					const serverId = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-					const now = Math.floor(Date.now() / 1000);
 
-					// Per-user Hetzner token (preferred) → fallback to env
-					let hetznerToken: string | null = null;
-					if (provider === "hetzner") {
-						const u = c.get?.("user");
-						if (u?.id) hetznerToken = await getProviderToken(env, u.id, "hetzner");
-					}
-
-					// Stub mode: no provider, or no token available
-					if (provider === "stub" || !hetznerToken) {
-						await env.void_db
-							.prepare(
-								`INSERT INTO servers (id, name, provider, region, size, status, created_at)
-								 VALUES (?, ?, ?, ?, ?, 'provisioning', ?)`,
-							)
-							.bind(serverId, name, provider, region, size, now)
-							.run();
+					// Provider guard — only hetzner + stub supported for now
+					if (provider !== "hetzner" && provider !== "stub") {
 						return Response.json(
-							rpc(id, {
-								content: [
-									{
-										type: "text",
-										text: JSON.stringify(
-											{
-												id: serverId,
-												name,
-												provider,
-												region,
-												size,
-												status: "provisioning",
-												note: env.HETZNER_TOKEN
-													? "Stub mode (provider=stub) — no Hetzner VM provisioned"
-													: "HETZNER_TOKEN not configured — set it via 'wrangler secret put HETZNER_TOKEN' for real provisioning.",
-											},
-											null,
-											2
-										),
-									},
-								],
-							})
+							rpcErr(id, -32009, `Provider '${provider}' not yet supported. Use 'hetzner' or 'stub'.`),
 						);
 					}
 
-					// Real Hetzner provisioning
-					if (provider !== "hetzner") {
-						return Response.json(
-							rpcErr(
-								id,
-								-32009,
-								`Provider '${provider}' not yet supported. Use 'hetzner' or 'stub'.`,
-							)
-						);
-					}
-
-					// generate a one-time setup token (stored in D1, consumed on first agent register)
-					const setupToken = `set_${crypto.randomUUID().replace(/-/g, "")}`;
-					// Insert row with status 'provisioning' and the setup_token (encrypted would
-					// be overkill — this is a one-time burn credential)
-					await env.void_db
-						.prepare(
-							`INSERT INTO servers (id, name, provider, region, size, status, setup_token, created_at)
-							 VALUES (?, ?, ?, ?, ?, 'provisioning', ?, ?)`,
-						)
-						.bind(serverId, name, provider, region, size, setupToken, now)
-						.run();
-
-					// Build cloud-init user_data. The agent binary URL points to the
-					// latest release on the void-sh org — adjust when we publish.
-					const apiBase = new URL(request.url).origin.replace(/^http/, "wss");
-					const userData = buildCloudInit({
-						server_id: serverId,
-						setup_token: setupToken,
-						api_base: apiBase,
-						github_release_tag: env.VOID_AGENT_RELEASE_TAG || "v0.1.0",
-					});
+					// Resolve user from bearer-auth context (if any) — same code path as UI
+					const u = c.get?.("user");
+					const userId = u?.id || null;
 
 					try {
-						const hs = await hetznerCreateServer(hetznerToken as string, {
-							name: `void-${serverId.slice(0, 12)}`,
-							server_type: size,
-							image,
-							location: region,
-							user_data: userData,
-						});
-
-						// Update the row with the real Hetzner details
-						await env.void_db
-							.prepare(
-								`UPDATE servers SET provider_server_id = ?, ip_address = ?, status = 'provisioning' WHERE id = ?`,
-							)
-							.bind(
-								String(hs.id),
-								hs.public_net?.ipv4?.ip || null,
-								serverId,
-							)
-							.run();
-
+						const result = await createServerForUser(
+							env,
+							userId,
+							{ name, size, region, image },
+							request.url,
+						);
 						return Response.json(
 							rpc(id, {
 								content: [
@@ -302,32 +218,28 @@ export async function handleMcp(c: any): Promise<Response> {
 										type: "text",
 										text: JSON.stringify(
 											{
-												id: serverId,
-												hetzner_id: hs.id,
-												name: hs.name,
-												status: hs.status, // "initializing" → "starting" → "running"
-												public_ip: hs.public_net?.ipv4?.ip,
-												region: hs.datacenter?.location?.name,
-												datacenter: hs.datacenter?.name,
-												size: hs.server_type?.name,
-												image: hs.image?.name,
-												note: "Agent will auto-register when cloud-init completes (~30-60s). Watch status with void_list_servers.",
+												id: result.id,
+												hetzner_id: result.hetzner_id,
+												name,
+												status: result.status,
+												public_ip: result.public_ip,
+												region: result.region,
+												datacenter: result.datacenter,
+												size: result.size,
+												image: result.image,
+												mode: result.mode,
+												note: result.note,
 											},
 											null,
-											2
+											2,
 										),
 									},
 								],
 							})
 						);
 					} catch (e: any) {
-						// Mark server as failed
-						await env.void_db
-							.prepare(`UPDATE servers SET status = 'failed' WHERE id = ?`)
-							.bind(serverId)
-							.run();
 						return Response.json(
-							rpcErr(id, -32010, `Hetzner provisioning failed: ${e?.message || e}`)
+							rpcErr(id, -32010, e?.message || String(e))
 						);
 					}
 				}

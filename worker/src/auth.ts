@@ -26,7 +26,7 @@ const GITHUB_USER_URL = "https://api.github.com/user";
  * the delete matches the set exactly (path, secure, etc.) — required
  * for the browser to actually remove it.
  */
-const SESSION_COOKIE_OPTS = {
+export const SESSION_COOKIE_OPTS = {
 	path: "/",
 	secure: true,
 	httpOnly: true,
@@ -35,7 +35,26 @@ const SESSION_COOKIE_OPTS = {
 };
 // Cookie name uses __Host- prefix: browser enforces path=/, secure,
 // no Domain. Prevents subdomain cookie injection.
-const SESSION_COOKIE_NAME = "__Host-void_session";
+export const SESSION_COOKIE_NAME = "__Host-void_session";
+
+/**
+ * Create a session for the given user and set the session cookie.
+ * Used by both the GitHub OAuth callback and the passkey login flow
+ * (both end up "logged in" the same way). Idempotent in the sense
+ * that the caller decides what to do with the response.
+ */
+export async function createSession(
+	c: Context,
+	user: { id: string; username: string; avatar_url: string | null },
+): Promise<void> {
+	const sessionId = crypto.randomUUID();
+	await c.env.ROUTES.put(
+		`session:${sessionId}`,
+		JSON.stringify({ user_id: user.id, username: user.username, avatar_url: user.avatar_url }),
+		{ expirationTtl: SESSION_TTL_SECONDS },
+	);
+	setCookie(c, SESSION_COOKIE_NAME, sessionId, SESSION_COOKIE_OPTS);
+}
 
 /**
  * Verify Bearer token on /api/* and /mcp. Returns null if authorized,
@@ -239,17 +258,13 @@ export async function handleAuthCallback(c: Context): Promise<Response> {
 			.run();
 	}
 
-	// Create session
-	const sessionId = crypto.randomUUID();
-	await env.ROUTES.put(
-		`session:${sessionId}`,
-		JSON.stringify({ user_id: userId, username: ghUser.login, avatar_url: ghUser.avatar_url }),
-		{ expirationTtl: SESSION_TTL_SECONDS },
-	);
-
-	// Set cookie via Hono helper. Same SESSION_COOKIE_OPTS as deleteCookie
-	// so the attributes match exactly.
-	setCookie(c, SESSION_COOKIE_NAME, sessionId, SESSION_COOKIE_OPTS);
+	// Create session — shared with passkey login so both flows produce
+	// the same session shape (KV key, cookie name, cookie attributes).
+	await createSession(c, {
+		id: userId,
+		username: ghUser.login,
+		avatar_url: ghUser.avatar_url,
+	});
 
 	// Show a brief "welcome" interstitial so the user can see the OAuth
 	// round-trip happened. Without this, /servers → OAuth → /servers looks
@@ -479,9 +494,9 @@ export function renderLandingHtml(opts: {
     backdrop-filter:blur(20px);
     -webkit-backdrop-filter:blur(20px);
   }
-  .top-right{position:absolute;top:0;right:0;display:flex;align-items:center;gap:12px}
-  .gh-link{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;color:#888;transition:color 0.15s}
-  .gh-link:hover{color:#fff}
+  .top-right{position:absolute;top:20px;right:24px;display:flex;align-items:center;gap:12px;z-index:2}
+  .gh-link{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;color:#888;transition:color 0.15s,background 0.15s;border-radius:8px}
+  .gh-link:hover{color:#fff;background:rgba(255,255,255,0.04)}
   .gh-link svg{width:22px;height:22px}
   .user-menu{position:relative}
   .user-menu summary{list-style:none;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;cursor:pointer;color:#999;font-size:0.9rem;transition:background 0.15s;user-select:none}
@@ -527,11 +542,39 @@ export function renderLandingHtml(opts: {
   .card .val{font-size:1.75rem;font-weight:700;line-height:1}
   .card .sub2{font-size:0.85rem;color:#666;margin-top:4px}
   .actions{display:flex;gap:12px;margin-bottom:32px;flex-wrap:wrap}
-  .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:8px;font-size:0.95rem;font-weight:600;text-decoration:none;border:1px solid transparent;transition:all 0.15s;cursor:pointer}
-  .btn-primary{background:#fff;color:#000}
-  .btn-primary:hover{background:#ddd}
-  .btn-secondary{background:#1a1a1a;color:#fff;border-color:#333}
-  .btn-secondary:hover{border-color:#555;background:#222}
+  .btn{display:inline-flex;align-items:center;gap:10px;padding:12px 22px;border-radius:10px;font-size:1rem;font-weight:600;text-decoration:none;border:1px solid transparent;transition:all 0.2s;cursor:pointer;white-space:nowrap;flex-shrink:0}
+  .btn svg{width:18px;height:18px;flex-shrink:0}
+  /* Primary CTA — matches the H1 gradient (etched-glass look) */
+  .btn-primary{
+    color:#000;
+    background:linear-gradient(95deg, #fff 0%, #f0f0f0 50%, #e0e0e0 100%);
+    border:1px solid rgba(255,255,255,0.3);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.4) inset,
+      0 8px 24px rgba(255,255,255,0.06),
+      0 0 40px rgba(255,255,255,0.04);
+    position:relative;
+    overflow:hidden;
+  }
+  .btn-primary:hover{
+    transform:translateY(-1px);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.5) inset,
+      0 12px 32px rgba(255,255,255,0.1),
+      0 0 60px rgba(255,255,255,0.06);
+  }
+  .btn-primary:active{transform:translateY(0)}
+  /* The 'shine' that sweeps across on hover — gives a glassy premium feel */
+  .btn-primary::after{
+    content:"";position:absolute;top:0;left:-100%;width:60%;height:100%;
+    background:linear-gradient(120deg, transparent 0%, rgba(255,255,255,0.3) 50%, transparent 100%);
+    transition:left 0.6s ease;
+    pointer-events:none;
+  }
+  .btn-primary:hover::after{left:120%}
+  .btn-primary svg{width:18px;height:18px}
+  .btn-secondary{background:rgba(255,255,255,0.04);color:#fff;border:1px solid rgba(255,255,255,0.08);backdrop-filter:blur(8px)}
+  .btn-secondary:hover{background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.15)}
   .features{background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:20px;margin-bottom:24px}
   .features h3{font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:#888;margin-bottom:12px}
   .features ul{list-style:none}
@@ -576,11 +619,23 @@ export function renderLandingHtml(opts: {
       <a href="/servers" class="btn btn-secondary">Servers</a>
       <a href="/projects" class="btn btn-secondary">Projects</a>
       <a href="/deployments" class="btn btn-secondary">Deployments</a>
-      <a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">+ New Server</a>
+      <a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">${octocat}New Server</a>
     ` : `
-      <a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">Get started with GitHub</a>
+      <a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">${octocat}Continue with GitHub</a>
+      <button type="button" id="passkey-btn" class="btn btn-secondary" onclick="loginWithPasskey()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true">
+          <path d="M12 2c-2.5 0-4.5 2-4.5 4.5v3c0 1 .5 2 1.5 2.5"/>
+          <path d="M12 2c2.5 0 4.5 2 4.5 4.5v3c0 1-.5 2-1.5 2.5"/>
+          <path d="M5 12a7 7 0 0 1 14 0v2"/>
+          <path d="M3 16a9 9 0 0 1 18 0"/>
+          <path d="M12 12v10"/>
+          <path d="M8 18l4 4 4-4"/>
+        </svg>
+        Continue with passkeys
+      </button>
     `}
   </div>
+  <small id="passkey-status" style="display:block;margin:-16px 0 32px;font-size:0.85rem;min-height:1.2em;color:#888"></small>
 
   <div id="panel"></div>
 
@@ -611,7 +666,56 @@ export function renderLandingHtml(opts: {
 }</code>
     <p style="color:#666;font-size:0.8rem;margin-top:8px">Set <code>VOID_BEARER_TOKEN</code> via <code>wrangler secret put VOID_BEARER_TOKEN</code> (use <code>openssl rand -hex 32</code>). Restart your AI client to load the MCP server.</p>
   </div>
+  </div>
 </div>
+<!-- Passkey login JS — uses the browser lib from jsdelivr's +esm
+     endpoint. Same flow as registration but in reverse: get options,
+     call navigator.credentials.get(), post response to /login/finish,
+     follow redirectTo on success. -->
+<script type="module">
+import { startAuthentication } from 'https://cdn.jsdelivr.net/npm/@simplewebauthn/browser@13.1.0/+esm';
+window.loginWithPasskey = async function() {
+  const btn = document.getElementById('passkey-btn');
+  const status = document.getElementById('passkey-status');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Waiting for passkey…';
+  status.style.color = '#888';
+  status.textContent = 'Tap your passkey (TouchID, FaceID, security key)…';
+  try {
+    const optsResp = await fetch('/api/passkey/login/start', { method: 'POST' });
+    if (!optsResp.ok) {
+      const j = await optsResp.json().catch(() => ({}));
+      throw new Error(j.error || ('HTTP ' + optsResp.status));
+    }
+    const opts = await optsResp.json();
+    let authResp;
+    try {
+      authResp = await startAuthentication({ optionsJSON: opts });
+    } catch (authErr) {
+      if (authErr && authErr.name === 'NotAllowedError') {
+        throw new Error('No passkey found for this site. Sign in with GitHub first, then add a passkey in /settings.');
+      }
+      throw authErr;
+    }
+    const verifyResp = await fetch('/api/passkey/login/finish', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ response: authResp })
+    });
+    const result = await verifyResp.json();
+    if (!result.ok) throw new Error(result.error || 'Verification failed');
+    status.style.color = '#0f0';
+    status.textContent = '✓ Signed in — redirecting…';
+    setTimeout(() => { window.location.href = result.redirectTo || '/dashboard'; }, 400);
+  } catch (err) {
+    status.style.color = '#f55';
+    status.textContent = '✕ ' + (err.message || err);
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+};
+</script>
 </body>
 </html>`;
 }

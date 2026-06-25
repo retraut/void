@@ -83,6 +83,21 @@ CREATE TABLE IF NOT EXISTS provider_credentials (
 	UNIQUE(user_id, provider)
 );
 CREATE INDEX IF NOT EXISTS idx_provider_credentials_user ON provider_credentials(user_id);
+
+CREATE TABLE IF NOT EXISTS passkeys (
+	id TEXT PRIMARY KEY,
+	user_id TEXT NOT NULL,
+	credential_id TEXT UNIQUE NOT NULL,
+	credential_public_key BLOB NOT NULL,
+	counter INTEGER NOT NULL DEFAULT 0,
+	transports TEXT,
+	name TEXT NOT NULL,
+	created_at INTEGER DEFAULT (unixepoch()),
+	last_used_at INTEGER,
+	FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id);
+CREATE INDEX IF NOT EXISTS idx_passkeys_credential ON passkeys(credential_id);
 `;
 
 // Idempotent column additions (for migrating existing tables created by an older schema).
@@ -96,6 +111,11 @@ const COLUMN_MIGRATIONS: Array<{ table: string; column: string; type: string }> 
 	{ table: "servers", column: "session_token", type: "TEXT" },
 	{ table: "servers", column: "session_token_created_at", type: "INTEGER" },
 	{ table: "servers", column: "tunnel_token_encrypted", type: "TEXT" },
+	{ table: "servers", column: "hetzner_project_id", type: "INTEGER" },
+	{ table: "servers", column: "hetzner_project_name", type: "TEXT" },
+	{ table: "servers", column: "cpu", type: "INTEGER" },
+	{ table: "servers", column: "memory", type: "INTEGER" },
+	{ table: "servers", column: "disk", type: "INTEGER" },
 	{ table: "projects", column: "build_command", type: "TEXT" },
 	{ table: "projects", column: "serve_command", type: "TEXT" },
 	{ table: "deployments", column: "hostname", type: "TEXT" },

@@ -1,11 +1,14 @@
 /**
  * void Worker — Hetzner Cloud API client
  *
- * Wraps the Hetzner Cloud API for creating/destroying servers.
+ * Wraps the Hetzner Cloud API for creating/destroying servers and
+ * fetching the catalog (server types, locations, images).
  * Requires HETZNER_TOKEN with read+write permissions.
  *
  * API docs: https://docs.hetzner.cloud/
  */
+
+import type { Env } from "./env";
 
 const HETZNER_API = "https://api.hetzner.cloud/v1";
 
@@ -18,9 +21,74 @@ export interface HetznerServer {
 		ipv4: { ip: string | null };
 		ipv6: { ip: string | null };
 	};
-	server_type: { name: string };
+	server_type: {
+		name: string;
+		description?: string;
+		cores?: number;
+		memory?: number; // GB
+		disk?: number; // GB
+		storage_type?: "local" | "network";
+		cpu_type?: "shared" | "dedicated";
+		architecture?: "x86" | "arm";
+	};
 	datacenter: { name: string; location: { name: string } };
 	image: { name: string };
+}
+
+export interface HetznerServerTypeLocation {
+	id: number;
+	name: string;
+	deprecation: { unavailable_after: string; announced: string } | null;
+	recommended: boolean;
+	available: boolean;
+}
+
+export interface HetznerServerType {
+	id: number;
+	name: string;
+	description: string;
+	cores: number;
+	memory: number; // GB
+	disk: number; // GB
+	storage_type: "local" | "network";
+	cpu_type: "shared" | "dedicated";
+	architecture: "x86" | "arm";
+	deprecated: boolean;
+	category: string | null;
+	// Cheap monthly price (net, in EUR) — taken from prices[0] for sorting
+	price_monthly: number;
+	// Monthly price in the user's preferred location (if known) — for display
+	price_display: string;
+	// Locations where this type is CURRENTLY available (real-time
+	// inventory from `server_types.locations[].available`). Drives the
+	// form's location → type filtering. The old way was
+	// `prices[].location` which only told us where the type has pricing
+	// (i.e. "supported") — not where it's actually orderable right now.
+	// Per the Hetzner OpenAPI spec, the /datacenters.server_types
+	// field is deprecated and the new authoritative source is
+	// `server_types.locations[].available`.
+	available_locations: string[];
+}
+
+export interface HetznerLocation {
+	id: number;
+	name: string;
+	description: string;
+	country: string;
+	city: string;
+	network_zone: "eu-central" | "us-east" | "us-west" | "ap-southeast";
+}
+
+export interface HetznerImage {
+	id: number;
+	name: string;
+	description: string;
+	type: "system" | "snapshot" | "backup";
+	os_flavor: "ubuntu" | "centos" | "debian" | "fedora" | "rocky" | "alma" | "opensuse" | "arch" | "unknown";
+	os_version: string | null;
+	architecture: "x86" | "arm";
+	status: "available" | "creating" | "deleted";
+	rapid_deploy: boolean;
 }
 
 interface HetznerCreateResponse {
@@ -56,6 +124,190 @@ async function hcloudFetch<T>(
 		throw new Error(`Hetzner API HTTP ${resp.status} on ${path}`);
 	}
 	return body;
+}
+
+/**
+ * KV cache TTL for the Hetzner catalog. 5 min for /server_types
+ * (availability is real-time inventory — 5 min is a good trade-off
+ * between freshness and rate-limit safety), 1h for the rest
+ * (locations/images rarely change). Override via
+ * `HETZNER_CATALOG_TTL_SECONDS` env for self-hosted deployments.
+ */
+const CATALOG_TTL_SECONDS =
+	parseInt((globalThis as any).process?.env?.HETZNER_CATALOG_TTL_SECONDS || "") ||
+	60 * 60; // 1h default
+
+/**
+ * Server-types cache is shorter — `locations[].available` is real-time
+ * inventory, so a stale cache shows types that just sold out as
+ * "available" and vice versa.
+ */
+const SERVER_TYPES_TTL_SECONDS =
+	parseInt((globalThis as any).process?.env?.HETZNER_TYPES_TTL_SECONDS || "") ||
+	5 * 60; // 5 min default
+
+/**
+ * Cached wrapper around any Hetzner GET. Key includes a short hash
+ * of the token so different users (with different tokens) cache
+ * independently. (In practice the catalog is the same for all valid
+ * tokens, but this avoids cross-tenant surprises if Hetzner ever
+ * rolls out per-account custom pricing.)
+ */
+async function cachedFetch<T>(
+	env: Env,
+	cacheKey: string,
+	token: string,
+	path: string,
+	ttlSeconds: number = CATALOG_TTL_SECONDS,
+): Promise<T> {
+	const fullKey = `hetzner:${cacheKey}:${tokenHash(token)}`;
+	const cached = await env.ROUTES.get(fullKey, "json");
+	if (cached) return cached as T;
+	const fresh = await hcloudFetch<T>(path, { token, method: "GET" });
+	await env.ROUTES.put(fullKey, JSON.stringify(fresh), { expirationTtl: ttlSeconds });
+	return fresh;
+}
+
+function tokenHash(token: string): string {
+	// Short, non-reversible fingerprint. We don't store the token,
+	// just enough to disambiguate cache entries.
+	let h = 5381;
+	for (let i = 0; i < token.length; i++) h = ((h << 5) + h) ^ token.charCodeAt(i);
+	return ("00000000" + (h >>> 0).toString(16)).slice(-8);
+}
+
+/**
+ * Invalidate all cached catalog entries for a given token. Called when
+ * the user clicks "Refresh catalog" on the new-server form, or after
+ * a 401 (token revoked) so the next fetch re-verifies.
+ */
+export async function invalidateCatalogCache(env: Env, token: string): Promise<void> {
+	const h = tokenHash(token);
+	await Promise.all([
+		env.ROUTES.delete(`hetzner:server_types:${h}`),
+		env.ROUTES.delete(`hetzner:locations:${h}`),
+		env.ROUTES.delete(`hetzner:images_x86:${h}`),
+		env.ROUTES.delete(`hetzner:projects:${h}`),
+	]);
+}
+
+/**
+ * List available Hetzner server types (sizes). Filtered to non-deprecated
+ * and x86 architecture (the void agent is x86_64 only). Returns the
+ * cheapest monthly price for each type, suitable for display, and
+ * the list of locations where the type is CURRENTLY available
+ * (real-time inventory from `locations[].available`, not just
+ * "supported" via `prices[].location`).
+ */
+export async function listServerTypes(env: Env, token: string): Promise<HetznerServerType[]> {
+	const raw = await cachedFetch<{
+		server_types: Array<{
+			id: number;
+			name: string;
+			description: string;
+			cores: number;
+			memory: number;
+			disk: number;
+			storage_type: "local" | "network";
+			cpu_type: "shared" | "dedicated";
+			architecture: "x86" | "arm";
+			deprecated: boolean;
+			category: string | null;
+			prices: Array<{ location: string; price_monthly: { net: string; gross: string } }>;
+			locations: HetznerServerTypeLocation[];
+		}>;
+	}>(env, "server_types", token, "/server_types", SERVER_TYPES_TTL_SECONDS);
+	return raw.server_types
+		.filter((t) => !t.deprecated && t.architecture === "x86")
+		.map((t) => {
+			// Show the cheapest monthly net price across all locations
+			const prices = t.prices.map((p) => parseFloat(p.price_monthly.net)).filter((n) => !isNaN(n));
+			const min = prices.length ? Math.min(...prices) : 0;
+			// REAL-TIME availability: only locations where the type is
+			// currently orderable. This is what tells us "cpx11 is sold
+			// out in nbg1 right now" vs the old `prices[].location` which
+			// only said "cpx11 has pricing in nbg1".
+			const available = (t.locations || [])
+				.filter((loc) => loc.available && !loc.deprecation)
+				.map((loc) => loc.name);
+			return {
+				id: t.id,
+				name: t.name,
+				description: t.description,
+				cores: t.cores,
+				memory: t.memory,
+				disk: t.disk,
+				storage_type: t.storage_type,
+				cpu_type: t.cpu_type,
+				architecture: t.architecture,
+				deprecated: t.deprecated,
+				category: t.category || null,
+				price_monthly: min,
+				price_display: `€${min.toFixed(2)}/mo`,
+				available_locations: available,
+			};
+		})
+		.sort((a, b) => a.price_monthly - b.price_monthly);
+}
+
+export async function listLocations(env: Env, token: string): Promise<HetznerLocation[]> {
+	const resp = await cachedFetch<{ locations: HetznerLocation[] }>(
+		env,
+		"locations",
+		token,
+		"/locations",
+	);
+	return resp.locations || [];
+}
+
+export async function listImages(
+	env: Env,
+	token: string,
+	opts: { architecture?: "x86" | "arm" } = {},
+): Promise<HetznerImage[]> {
+	const qs = new URLSearchParams({ type: "system" });
+	if (opts.architecture) qs.set("architecture", opts.architecture);
+	const resp = await cachedFetch<{ images: HetznerImage[] }>(
+		env,
+		"images_x86",
+		token,
+		`/images?${qs.toString()}`,
+	);
+	return (resp.images || [])
+		.filter((i) => i.status === "available" && i.architecture === "x86")
+		.sort((a, b) => {
+			// Ubuntu first, then Debian, then others
+			const rank = (img: HetznerImage) =>
+				img.os_flavor === "ubuntu" ? 0 : img.os_flavor === "debian" ? 1 : 2;
+			return rank(a) - rank(b) || a.name.localeCompare(b.name);
+		});
+}
+
+export interface HetznerProject {
+	id: number;
+	name: string;
+	created: string;
+	// Aggregate stats returned alongside the project
+	servers: number;
+	load_balancers: number;
+	volumes: number;
+	primary_datacenter: { id: number; name: string; location: { name: string } } | null;
+}
+
+/**
+ * List Hetzner Cloud projects the token has access to. Used to display
+ * which project a server belongs to. Note: when creating a server, the
+ * project is implicit (whatever the API token is scoped to) — there's
+ * no way to pass project_id at create time.
+ */
+export async function listProjects(env: Env, token: string): Promise<HetznerProject[]> {
+	const resp = await cachedFetch<{ projects: HetznerProject[] }>(
+		env,
+		"projects",
+		token,
+		"/projects",
+	);
+	return resp.projects || [];
 }
 
 /**

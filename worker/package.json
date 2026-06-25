@@ -17,6 +17,8 @@
     "wrangler": "3.114.17"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/server": "^13.3.2",
     "hono": "^4.12.27",
     "zod": "^4.4.3"
   }

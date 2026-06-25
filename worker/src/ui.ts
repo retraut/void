@@ -145,7 +145,7 @@ function html(
   h2{font-size:1rem;font-weight:600;margin:32px 0 12px;color:#aaa;text-transform:uppercase;letter-spacing:0.05em}
 
   /* Cards / tables (legacy) */
-  .card{background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:20px;margin-bottom:16px}
+  .card{background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:20px;margin-bottom:20px}
   .empty{padding:60px 20px;text-align:center;color:#666}
   .empty h2{color:#fff;text-transform:none;font-size:1.25rem;margin-bottom:8px}
   table{width:100%;border-collapse:collapse;font-size:0.9rem}
@@ -213,6 +213,222 @@ function html(
   .settings-row .label small{display:block;color:#666;font-size:0.8rem;margin-top:2px}
   .settings-row .value{color:#888;font-family:ui-monospace,monospace;font-size:0.85rem}
 
+  /* Form: option cards (radio inputs styled as clickable cards) */
+  .form-section{margin-bottom:32px}
+  .form-section h2{margin:0 0 12px;color:#fff;text-transform:none;font-size:1.1rem;font-weight:600;letter-spacing:-0.01em}
+  .form-section .form-hint{color:#666;font-size:0.85rem;margin:0 0 14px}
+  .option-grid{display:grid;gap:10px}
+  .option-grid.cols-4{grid-template-columns:repeat(auto-fill,minmax(170px,1fr))}
+  .option-grid.cols-3{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+  .option-card{
+    display:block;position:relative;
+    padding:14px 16px;
+    border:1px solid #222;border-radius:10px;
+    background:#0a0a0a;cursor:pointer;
+    transition:all 0.15s;
+  }
+  .option-card:hover{border-color:#444;background:#101010}
+  .option-card input[type="radio"]{position:absolute;opacity:0;pointer-events:none;width:0;height:0}
+  .option-card:has(input:checked){
+    border-color:#0f8;
+    background:linear-gradient(135deg, rgba(0,255,136,0.08) 0%, rgba(0,255,136,0.02) 100%);
+    box-shadow:0 0 0 1px #0f8, 0 0 24px rgba(0,255,136,0.10);
+  }
+  .option-card .oc-name{font-weight:600;color:#fff;font-size:0.95rem}
+  .option-card .oc-sub{font-size:0.78rem;color:#888;margin-top:2px}
+  .option-card .oc-specs{font-size:0.8rem;color:#999;margin-top:6px;display:flex;flex-wrap:wrap;gap:6px 10px}
+  .option-card .oc-specs span{color:#ccc}
+  .option-card .oc-price{font-size:0.95rem;font-weight:700;color:#0f8;margin-top:8px;letter-spacing:-0.01em}
+  .option-card .oc-check{position:absolute;top:10px;right:12px;width:14px;height:14px;border-radius:50%;border:1.5px solid #444}
+  .option-card:has(input:checked) .oc-check{background:#0f8;border-color:#0f8;box-shadow:0 0 8px #0f8}
+  .option-card .oc-check::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;border:solid #000;border-width:0 2px 2px 0;transform:rotate(45deg);opacity:0}
+  .option-card:has(input:checked) .oc-check::after{opacity:1}
+  .option-row{
+    display:flex;align-items:center;gap:12px;
+    padding:12px 16px;
+    border:1px solid #222;border-radius:8px;
+    background:#0a0a0a;cursor:pointer;margin-bottom:8px;
+    transition:all 0.15s;
+  }
+  .option-row:hover{border-color:#444}
+  .option-row input[type="radio"]{margin:0;accent-color:#0f8}
+  .option-row:has(input:checked){border-color:#0f8;background:rgba(0,255,136,0.05)}
+  .option-row .or-name{font-weight:500;color:#fff}
+  .option-row .or-sub{color:#888;font-size:0.8rem;margin-left:auto}
+
+  .form-input{
+    width:100%;padding:10px 14px;
+    background:#000;border:1px solid #333;border-radius:8px;
+    color:#fff;font-size:1rem;font-family:ui-monospace,monospace;
+    box-sizing:border-box;transition:border-color 0.15s;
+  }
+  .form-input:focus{outline:none;border-color:#0f8;box-shadow:0 0 0 3px rgba(0,255,136,0.15)}
+  .form-input:invalid{border-color:#6b1f1f}
+  .form-actions{display:flex;gap:10px;justify-content:flex-end;padding-top:16px;border-top:1px solid #1a1a1a;margin-top:8px}
+  .form-error{background:#330a0a;border:1px solid #6b1f1f;color:#f55;padding:14px 18px;border-radius:8px;margin-bottom:20px;font-size:0.9rem;line-height:1.55;white-space:pre-line}
+.form-error a{color:#6cf;text-decoration:underline}
+
+  /* Advanced section — collapsed by default. Use native <details> for
+     accessibility and zero-JS, but style the disclosure arrow + summary. */
+  details.adv{border:1px solid #1a1a1a;border-radius:10px;background:#0a0a0a;margin-top:24px;overflow:hidden}
+  details.adv>summary{list-style:none;cursor:pointer;padding:14px 18px;display:flex;align-items:center;gap:12px;user-select:none;color:#999;transition:color 0.15s, background 0.15s}
+  details.adv>summary:hover{color:#fff;background:#101010}
+  details.adv>summary::-webkit-details-marker{display:none}
+  details.adv>summary::before{content:"▸";display:inline-block;font-size:0.7rem;transition:transform 0.2s;color:#666;width:12px;flex-shrink:0}
+  details.adv[open]>summary::before{transform:rotate(90deg);color:#0f8}
+  details.adv>summary strong{color:#fff;font-weight:600;font-size:0.95rem;letter-spacing:-0.01em}
+  details.adv .adv-body{padding:16px 18px 18px;border-top:1px solid #1a1a1a}
+  details.adv .adv-summary{color:#888;font-size:0.85rem;margin-left:auto;font-family:ui-monospace,monospace}
+  details.adv .adv-summary code{background:#1a1a1a;padding:1px 6px;border-radius:4px;color:#0f8;font-size:0.8rem}
+
+  /* Connected-account widget — one compact card that says "you're
+     logged in as @you via GitHub, here's your session info, and a
+     way to sign out". Green glow signals "active/connected". */
+  .connected-account{
+    display:flex;align-items:center;gap:18px;
+    padding:20px 24px;
+    border:1px solid rgba(0,255,136,0.18);
+    border-radius:12px;
+    background:
+      linear-gradient(135deg, rgba(0,255,136,0.05) 0%, rgba(0,255,136,0) 60%),
+      linear-gradient(180deg, #0a0a0a 0%, #050505 100%);
+    position:relative;overflow:hidden;
+    margin-bottom:24px;
+    box-shadow:
+      0 0 0 1px rgba(0,255,136,0.05),
+      0 0 32px rgba(0,255,136,0.05),
+      inset 0 1px 0 rgba(0,255,136,0.08);
+  }
+  .connected-account::before{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse 50% 90% at 0% 50%, rgba(0,255,136,0.10) 0%, transparent 65%);
+  }
+  .ca-icon{
+    position:relative;flex-shrink:0;
+    width:48px;height:48px;
+    display:flex;align-items:center;justify-content:center;
+    border-radius:12px;
+    background:rgba(0,255,136,0.08);
+    color:#0f8;
+    border:1px solid rgba(0,255,136,0.25);
+    box-shadow:0 0 18px rgba(0,255,136,0.18);
+  }
+  .ca-icon svg{width:26px;height:26px;display:block}
+  .ca-pulse{
+    position:absolute;top:-2px;right:-2px;
+    width:10px;height:10px;border-radius:50%;
+    background:#0f8;
+    box-shadow:0 0 10px #0f8, 0 0 4px #0f8;
+    border:2px solid #0a0a0a;
+    animation:ca-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes ca-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(1.35)}}
+  .ca-info{flex:1;min-width:0;position:relative}
+  .ca-name{font-size:1.1rem;font-weight:600;color:#fff;letter-spacing:-0.01em}
+  .ca-meta{
+    font-size:0.85rem;color:#888;margin-top:3px;
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  }
+  .ca-provider{color:#0f8;font-weight:500}
+  .ca-sep{color:#333}
+  .ca-logout{
+    color:#888;font-size:0.85rem;text-decoration:none;
+    padding:8px 14px;border-radius:8px;
+    border:1px solid #222;
+    background:rgba(255,255,255,0.02);
+    transition:all 0.15s;flex-shrink:0;font-weight:500;
+    position:relative;
+  }
+  .ca-logout:hover{color:#f55;border-color:#6b1f1f;background:rgba(255,85,85,0.06);text-decoration:none}
+
+  /* Server card grid (replaces the old table) */
+  .server-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+  .server-card{
+    background:linear-gradient(180deg, #0a0a0a 0%, #060606 100%);
+    border:1px solid #1a1a1a;border-radius:14px;
+    padding:20px;
+    display:flex;flex-direction:column;gap:14px;
+    transition:border-color 0.15s, transform 0.15s;
+    position:relative;overflow:hidden;
+  }
+  .server-card:hover{border-color:#333;transform:translateY(-1px)}
+  .server-card::before{content:"";position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)}
+  .sc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .sc-name{font-size:1.05rem;font-weight:600;color:#fff;letter-spacing:-0.01em}
+  .sc-id{margin-top:3px}
+  .sc-id code{background:transparent;padding:0;color:#666;font-size:0.72rem;font-family:ui-monospace,monospace}
+  .sc-specs{display:flex;flex-wrap:wrap;gap:6px}
+  .sc-specs span{font-size:0.72rem;color:#888;background:#0f0f0f;border:1px solid #1a1a1a;padding:3px 8px;border-radius:6px;font-weight:500;letter-spacing:0.02em}
+  .sc-project{color:#D50C2D !important;border-color:rgba(213,12,45,0.25) !important;background:rgba(213,12,45,0.06) !important}
+  .sc-tunnel{color:#0f8 !important;border-color:rgba(0,255,136,0.25) !important;background:rgba(0,255,136,0.06) !important}
+  .sc-specs-hw{color:#ccc !important;background:linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)) !important;font-family:ui-monospace,monospace !important;font-variant-numeric:tabular-nums}
+  .sc-meta{display:flex;flex-direction:column;gap:5px;padding-top:8px;border-top:1px solid #141414}
+  .sc-meta-row{display:flex;align-items:center;justify-content:space-between;font-size:0.8rem}
+  .sc-meta-label{color:#666;text-transform:uppercase;letter-spacing:0.04em;font-size:0.7rem;font-weight:600}
+  .sc-meta-row code{background:transparent;padding:0;color:#ccc;font-size:0.8rem}
+  .sc-actions{display:flex;gap:6px;padding-top:4px}
+
+  /* Provisioning state — animated progress bar + spinner so the
+     user sees the server is being created in real time. Polls every
+     10s; when the agent registers the status flips to 'active' and
+     these visuals disappear. */
+  .server-card.provisioning{border-color:rgba(0,255,136,0.18);background:linear-gradient(180deg, rgba(0,255,136,0.02) 0%, #060606 100%)}
+  .sc-progress{height:3px;background:#1a1a1a;border-radius:2px;overflow:hidden;position:relative;margin-top:-4px}
+  .sc-progress::after{content:"";position:absolute;top:0;left:0;width:30%;height:100%;background:linear-gradient(90deg, transparent, #0f8, transparent);animation:sc-progress-anim 1.5s linear infinite}
+  @keyframes sc-progress-anim{0%{left:-30%}100%{left:100%}}
+  .sc-progress-wait{display:flex;align-items:center;gap:6px;color:#888;font-size:0.78rem;padding-top:4px}
+  .sc-spinner{display:inline-block;width:10px;height:10px;border:2px solid #333;border-top-color:#0f8;border-radius:50%;animation:sc-spin 0.8s linear infinite;flex-shrink:0}
+  @keyframes sc-spin{to{transform:rotate(360deg)}}
+  .sc-elapsed{color:#666;font-size:0.72rem;margin-left:auto;font-family:ui-monospace,monospace}
+  @media (max-width: 768px){.server-grid{grid-template-columns:1fr}}
+  .provider-widget{
+    display:flex;align-items:center;gap:18px;
+    padding:20px 24px;
+    border:1px solid rgba(213,12,45,0.18);
+    border-radius:12px;
+    background:
+      linear-gradient(135deg, rgba(213,12,45,0.05) 0%, rgba(213,12,45,0) 60%),
+      linear-gradient(180deg, #0a0a0a 0%, #050505 100%);
+    position:relative;overflow:hidden;
+    box-shadow:
+      0 0 0 1px rgba(213,12,45,0.05),
+      0 0 32px rgba(213,12,45,0.05),
+      inset 0 1px 0 rgba(213,12,45,0.08);
+  }
+  .provider-widget::before{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse 50% 90% at 0% 50%, rgba(213,12,45,0.10) 0%, transparent 65%);
+  }
+  .pw-icon{
+    position:relative;flex-shrink:0;
+    width:48px;height:48px;
+    display:flex;align-items:center;justify-content:center;
+    border-radius:10px;overflow:hidden;
+    box-shadow:0 0 18px rgba(213,12,45,0.20), 0 2px 8px rgba(0,0,0,0.4);
+    text-decoration:none;
+    transition:transform 0.15s, box-shadow 0.15s;
+  }
+  .pw-icon:hover{transform:scale(1.05);box-shadow:0 0 24px rgba(213,12,45,0.35), 0 2px 12px rgba(0,0,0,0.5)}
+  .pw-icon:active{transform:scale(0.98)}
+  .pw-icon svg{width:100%;height:100%;display:block}
+  .pw-pulse{
+    position:absolute;top:-2px;right:-2px;
+    width:10px;height:10px;border-radius:50%;
+    background:#D50C2D;
+    box-shadow:0 0 10px #D50C2D, 0 0 4px #D50C2D;
+    border:2px solid #0a0a0a;
+    animation:pw-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pw-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(1.35)}}
+  .pw-info{flex:1;min-width:0;position:relative}
+  .pw-name{font-size:1.05rem;font-weight:600;color:#fff;letter-spacing:-0.01em;display:flex;align-items:center;gap:8px}
+  .pw-tag{font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;color:#D50C2D;background:rgba(213,12,45,0.10);border:1px solid rgba(213,12,45,0.25);padding:2px 6px;border-radius:4px;font-weight:700}
+  .pw-meta{font-size:0.85rem;color:#888;margin-top:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .pw-status-ok{color:#D50C2D;font-weight:500}
+  .pw-status-missing{color:#666}
+  .pw-sep{color:#333}
+  .pw-action{flex-shrink:0;position:relative}
+
   /* Toast (top of page, auto-dismiss) */
   .toast{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:10px;margin-bottom:24px;font-size:0.9rem;animation:toast-in 280ms cubic-bezier(.34,1.56,.64,1) both;box-shadow:0 4px 20px rgba(0,0,0,0.4)}
   .toast-success{background:#0a3320;border:1px solid #1f6b3d;color:#0f0}
@@ -272,67 +488,182 @@ function timeAgo(epochSeconds: number | null): string {
 export async function renderServersPage(
 	c: any,
 	user: { id: string; username: string; avatar_url: string | null } | null,
+	flash: { kind: string | null; msg: string | null } = { kind: null, msg: null },
 ): Promise<Response> {
 	const env = c.env;
 	const { getCurrentProject } = await import("./state");
 	const currentProject = await getCurrentProject(c);
-	const projectId = currentProject?.id || null;
 
-	const whereClause = projectId
-		? `WHERE p.id = ? AND p.user_id = ?`
-		: `WHERE s.user_id = ?`;
-	const bindArgs = projectId
-		? [projectId, user!.id]
-		: [user!.id];
+	// Flash toast (top of page, auto-dismisses 8s — long enough to read
+	// the provisioning ETA)
+	const toast = flash.kind && flash.msg
+		? `<div class="toast toast-${escape(flash.kind)}" id="toast">
+			<span class="toast-icon">${flash.kind === "success" ? "✓" : "✕"}</span>
+			<span class="toast-msg">${escape(flash.msg)}</span>
+			<button type="button" class="toast-close" onclick="document.getElementById('toast').remove()" aria-label="Dismiss">×</button>
+		</div>
+		<script>setTimeout(function(){var t=document.getElementById('toast');if(t)t.remove()},8000)</script>`
+		: "";
 
+	// /servers shows ALL of the user's servers regardless of which
+	// project is selected in the sidebar (the project filter is for
+	// /dashboard and /deployments, not servers). Previously used an
+	// INNER JOIN which hid newly-created servers that aren't yet linked
+	// to a project.
 	const { results } = await env.void_db
 		.prepare(
 			`SELECT s.id, s.name, s.provider, s.status, s.region, s.size, s.last_seen_at, s.tunnel_id IS NOT NULL AS has_tunnel,
+			        s.hetzner_project_name, s.provider_server_id, s.ip_address,
+			        s.created_at,
 			        (SELECT COUNT(*) FROM deployments d WHERE d.server_id = s.id) AS deployment_count
 			 FROM servers s
-			 ${projectId ? "INNER JOIN projects p ON p.server_id = s.id" : ""}
-			 ${whereClause}
+			 WHERE s.user_id = ?
 			 ORDER BY s.created_at DESC`,
 		)
-		.bind(...bindArgs)
-		.all<{ id: string; name: string; provider: string; status: string; region: string; size: string; last_seen_at: number | null; has_tunnel: number; deployment_count: number }>();
+		.bind(user!.id)
+		.all<{
+			id: string; name: string; provider: string; status: string; region: string; size: string;
+			last_seen_at: number | null; has_tunnel: number; deployment_count: number;
+			hetzner_project_name: string | null; provider_server_id: string | null;
+			ip_address: string | null; created_at: number;
+		}>();
 
 	const body = `
+${toast}
 <h1>Servers</h1>
 <div class="actions">
-  <a href="https://github.com/void-sh/void" class="btn btn-secondary">+ Add via MCP (void_create_server)</a>
+  <a href="/servers/new" class="btn btn-primary">+ New server</a>
+  <a href="https://github.com/void-sh/void" class="btn btn-secondary">via MCP (void_create_server)</a>
+  <button class="btn btn-secondary" id="sync-all-btn" type="button" title="Re-check all servers' status with Hetzner">⟳ Sync all</button>
 </div>
 ${results.length === 0
-	? `<div class="card empty"><h2>No servers yet</h2><p>Use the <code>void_create_server</code> MCP tool to provision a Hetzner VM. It will auto-install the agent and register with the control plane.</p></div>`
-	: `<div class="card"><table>
-		<thead><tr>
-			<th>Name</th><th>ID</th><th>Provider</th><th>Region</th><th>Size</th>
-			<th>Status</th><th>Tunnel</th><th>Deploys</th><th>Last seen</th><th></th>
-		</tr></thead>
-		<tbody>
-		${results
-			.map(
-				(s) => `
-			<tr>
-				<td><strong>${escape(s.name)}</strong></td>
-				<td><code class="mono">${escape(s.id)}</code></td>
-				<td>${escape(s.provider)}</td>
-				<td>${escape(s.region || "—")}</td>
-				<td>${escape(s.size || "—")}</td>
-				<td><span class="status status-${escape(s.status)}">${escape(s.status)}</span></td>
-				<td>${s.has_tunnel ? "✓" : "—"}</td>
-				<td>${s.deployment_count}</td>
-				<td class="meta">${timeAgo(s.last_seen_at)}</td>
-				<td>
-					<form method="POST" action="/servers/${escape(s.id)}/rotate-session" style="display:inline" onsubmit="return confirm('Rotate session token for ${escape(s.name)}? The agent will be disconnected and must re-register with the new token.')">
-						<button class="btn btn-secondary" type="submit" style="padding:4px 10px;font-size:0.8rem">rotate</button>
-					</form>
-				</td>
-			</tr>`,
-			)
-			.join("")}
-		</tbody>
-	</table></div>`}`;
+		? `<div class="card empty">
+			<h2>No servers yet</h2>
+			<p style="margin-bottom:16px">Provision a Hetzner Cloud VM. The void-agent auto-installs via cloud-init and registers with the control plane — no SSH, no manual setup.</p>
+			<a href="/servers/new" class="btn btn-primary">+ Create your first server</a>
+		</div>`
+		: `<div class="server-grid" id="server-grid">
+		${results.map((s) => renderServerCard(s)).join("")}
+		</div>
+
+<script>
+// Auto-poll /api/servers every 10s for live status updates (D1 data only,
+// no Hetzner calls). Pauses when the tab is hidden to save CPU.
+(function(){
+  var grid = document.getElementById('server-grid');
+  if (!grid) return;
+  function fmtTimeAgo(epoch){
+    if (!epoch) return '—';
+    var d = Math.floor(Date.now()/1000 - epoch);
+    if (d < 60) return d + 's ago';
+    if (d < 3600) return Math.floor(d/60) + 'm ago';
+    if (d < 86400) return Math.floor(d/3600) + 'h ago';
+    return Math.floor(d/86400) + 'd ago';
+  }
+  function paint(s){
+    var isProv = s.status === 'provisioning';
+    var elapsed = '';
+    if (isProv && s.created_at) {
+      var d = Math.floor(Date.now()/1000 - s.created_at);
+      if (d < 60) elapsed = d + 's';
+      else if (d < 3600) elapsed = Math.floor(d/60) + 'm';
+      else elapsed = Math.floor(d/3600) + 'h';
+    }
+    var hw = (s.cpu != null && s.memory != null) ? '<span class="sc-specs-hw">' + s.cpu + ' vCPU · ' + s.memory + ' GB · ' + (s.disk != null ? s.disk : '?') + ' GB SSD</span>' : '';
+    return '<div class="server-card' + (isProv ? ' provisioning' : '') + '" data-id="' + s.id + '">' +
+      '<div class="sc-head">' +
+        '<div class="sc-name">' + (s.name || '—') + '</div>' +
+        '<span class="status status-' + s.status + '">' + s.status + '</span>' +
+      '</div>' +
+      (isProv ? '<div class="sc-progress"></div>' : '') +
+      '<div class="sc-specs">' +
+        (s.region ? '<span>' + s.region + '</span>' : '') +
+        (s.size ? '<span>' + s.size + '</span>' : '') +
+        hw +
+        (s.hetzner_project_name ? '<span class="sc-project">' + s.hetzner_project_name + '</span>' : '') +
+      '</div>' +
+      '<div class="sc-meta">' +
+        (s.ip_address ? '<div class="sc-meta-row"><span class="sc-meta-label">IP</span><code class="mono">' + s.ip_address + '</code></div>' : '') +
+        '<div class="sc-meta-row"><span class="sc-meta-label">Last seen</span><span>' + fmtTimeAgo(s.last_seen_at) + '</span></div>' +
+        '<div class="sc-meta-row"><span class="sc-meta-label">Deploys</span><span>' + s.deployment_count + '</span></div>' +
+      '</div>' +
+      (isProv ? '<div class="sc-progress-wait"><span class="sc-spinner"></span>Waiting for agent to register…<span class="sc-elapsed">' + elapsed + '</span></div>' : '') +
+      '<div class="sc-actions">' +
+        (s.provider_server_id && s.status !== 'destroyed' ? '<button class="btn btn-secondary sc-sync" data-id="' + s.id + '" style="padding:5px 10px;font-size:0.78rem">⟳ Sync</button>' : '') +
+        '<button class="btn btn-secondary sc-rotate" data-id="' + s.id + '" data-name="' + (s.name || '').replace(/"/g, '&quot;') + '" style="padding:5px 10px;font-size:0.78rem">rotate</button>' +
+        '<button class="btn btn-danger sc-delete" data-id="' + s.id + '" data-name="' + (s.name || '').replace(/"/g, '&quot;') + '" style="padding:5px 10px;font-size:0.78rem">delete</button>' +
+      '</div>' +
+    '</div>';
+  }
+  async function poll(){
+    if (document.hidden) return;
+    try {
+      var resp = await fetch('/api/servers-ui', { headers: { 'accept': 'application/json' } });
+      if (!resp.ok) return;
+      var data = await resp.json();
+      if (!data.servers) return;
+      // Re-render the grid (cheap — D1 typically has < 100 rows)
+      grid.innerHTML = data.servers.map(paint).join('');
+    } catch (e) {}
+  }
+  // Click handlers for sync/rotate (delegated)
+  grid.addEventListener('click', function(e){
+    var t = e.target;
+    if (t.classList.contains('sc-sync')) {
+      e.preventDefault();
+      t.disabled = true; t.textContent = 'syncing…';
+      var fd = new FormData();
+      fetch('/servers/' + t.dataset.id + '/sync', { method: 'POST', body: fd })
+        .then(function(r){ if (r.ok) location.reload(); else { t.disabled = false; t.textContent = '⟳ Sync'; alert('Sync failed'); } })
+        .catch(function(){ t.disabled = false; t.textContent = '⟳ Sync'; });
+    }
+    if (t.classList.contains('sc-rotate')) {
+      if (!confirm('Rotate session token for ' + t.dataset.name + '? The agent will be disconnected and must re-register with the new token.')) {
+        e.preventDefault();
+      }
+    }
+    if (t.classList.contains('sc-delete')) {
+      if (!confirm("Delete server '" + t.dataset.name + "'? This will try to delete the VM in Hetzner and remove it from void.")) {
+        e.preventDefault();
+      } else {
+        t.disabled = true; t.textContent = 'deleting…';
+        // Submit a form to /servers/:id/delete (since we used a button
+        // in the JSON-painted version, not a form). Use fetch + redirect.
+        var fd = new FormData();
+        fetch('/servers/' + t.dataset.id + '/delete', { method: 'POST', body: fd })
+          .then(function(){ window.location.reload(); })
+          .catch(function(){ t.disabled = false; t.textContent = 'delete'; alert('Delete failed'); });
+      }
+    }
+  });
+  // "Sync all" button: hit /servers/:id/sync for each card in sequence
+  var syncAll = document.getElementById('sync-all-btn');
+  if (syncAll) {
+    syncAll.addEventListener('click', function(){
+      var btns = grid.querySelectorAll('.sc-sync');
+      if (!btns.length) { alert('No servers with Hetzner IDs to sync.'); return; }
+      syncAll.disabled = true;
+      var orig = syncAll.textContent;
+      var done = 0;
+      btns.forEach(function(b){
+        b.disabled = true; b.textContent = 'syncing…';
+        fetch('/servers/' + b.dataset.id + '/sync', { method: 'POST' })
+          .then(function(){ done++; b.textContent = '✓'; b.disabled = false; })
+          .catch(function(){ done++; b.textContent = '✕'; b.disabled = false; })
+          .finally(function(){
+            if (done === btns.length) {
+              syncAll.disabled = false;
+              syncAll.textContent = orig;
+              poll(); // refresh
+            }
+          });
+      });
+    });
+  }
+  // Poll every 10s
+  setInterval(poll, 10000);
+})();
+</script>`}`;
 	const allProjects = user ? await env.void_db
 		.prepare("SELECT id, name, slug FROM projects WHERE user_id = ? ORDER BY created_at DESC")
 		.bind(user.id)
@@ -343,6 +674,56 @@ ${results.length === 0
 		currentProject,
 		projects: allProjects.results,
 	});
+}
+
+/**
+ * Render a single server card. Used in the /servers grid and by the
+ * auto-poll JS (which re-renders the same structure from JSON).
+ */
+function renderServerCard(s: {
+	id: string; name: string; provider: string; status: string; region: string; size: string;
+	last_seen_at: number | null; has_tunnel: number; deployment_count: number;
+	hetzner_project_name: string | null; provider_server_id: string | null;
+	ip_address: string | null; created_at: number;
+	cpu: number | null; memory: number | null; disk: number | null;
+}): string {
+	const isProvisioning = s.status === "provisioning";
+	const elapsed = isProvisioning && s.created_at ? timeAgo(s.created_at) : "";
+	const hasSpecs = s.cpu != null && s.memory != null;
+	return `<div class="server-card${isProvisioning ? " provisioning" : ""}" data-id="${escape(s.id)}">
+		<div class="sc-head">
+			<div>
+				<div class="sc-name">${escape(s.name)}</div>
+				<div class="sc-id"><code class="mono">${escape(s.id)}</code></div>
+			</div>
+			<span class="status status-${escape(s.status)}">${escape(s.status)}</span>
+		</div>
+		${isProvisioning ? `<div class="sc-progress" title="Provisioning — agent will register in ~30-60s"></div>` : ""}
+		<div class="sc-specs">
+			${s.region ? `<span>${escape(s.region)}</span>` : ""}
+			${s.size ? `<span>${escape(s.size)}</span>` : ""}
+			${hasSpecs ? `<span class="sc-specs-hw" title="Specs">${s.cpu} vCPU · ${s.memory} GB · ${s.disk ?? "?"} GB SSD</span>` : ""}
+			${s.hetzner_project_name ? `<span class="sc-project">${escape(s.hetzner_project_name)}</span>` : ""}
+			${s.has_tunnel ? `<span class="sc-tunnel" title="Cloudflare tunnel active">↗ tunnel</span>` : ""}
+		</div>
+		<div class="sc-meta">
+			${s.ip_address ? `<div class="sc-meta-row"><span class="sc-meta-label">IP</span><code class="mono">${escape(s.ip_address)}</code></div>` : ""}
+			<div class="sc-meta-row"><span class="sc-meta-label">Last seen</span><span>${timeAgo(s.last_seen_at)}</span></div>
+			<div class="sc-meta-row"><span class="sc-meta-label">Deploys</span><span>${s.deployment_count}</span></div>
+		</div>
+		${isProvisioning ? `<div class="sc-progress-wait"><span class="sc-spinner"></span>Waiting for agent to register…<span class="sc-elapsed">${escape(elapsed)}</span></div>` : ""}
+		<div class="sc-actions">
+			${s.provider_server_id && s.status !== "destroyed" ? `<form method="POST" action="/servers/${escape(s.id)}/sync" style="display:inline" title="Re-check status with Hetzner">
+				<button class="btn btn-secondary" type="submit" style="padding:5px 10px;font-size:0.78rem">⟳ Sync</button>
+			</form>` : ""}
+			<form method="POST" action="/servers/${escape(s.id)}/rotate-session" style="display:inline">
+				<button class="btn btn-secondary" type="submit" style="padding:5px 10px;font-size:0.78rem">rotate</button>
+			</form>
+			<form method="POST" action="/servers/${escape(s.id)}/delete" style="display:inline" onsubmit="return confirm('Delete server ${escape(s.name)}? This will try to delete the VM in Hetzner and remove it from void.')">
+				<button class="btn btn-danger" type="submit" style="padding:5px 10px;font-size:0.78rem">delete</button>
+			</form>
+		</div>
+	</div>`;
 }
 
 // ============== Projects page ==============
@@ -773,130 +1154,168 @@ export async function renderSettingsPage(
 	const creds = user ? await listProviderCredentials(env, user.id) : [];
 	const hetznerCred = creds.find((c) => c.provider === "hetzner");
 
+	// Passkeys for the Authentication section
+	const { listPasskeys } = await import("./passkey");
+	const passkeys = user ? await listPasskeys(env, user.id) : [];
+
 	const body = `
 ${toast}
 <h1>Settings</h1>
 
-<div class="card">
-	<h2 style="margin-top:0">Account</h2>
-	${fullUser
-		? `<div class="settings-row">
-				<div class="label">Username<small>Your GitHub login</small></div>
-				<div class="value">@${escape(fullUser.username)}</div>
-			</div>
-			<div class="settings-row">
-				<div class="label">GitHub ID<small>Immutable</small></div>
-				<div class="value">${escape(fullUser.github_id)}</div>
-			</div>
-			<div class="settings-row">
-				<div class="label">Joined<small>Account created</small></div>
-				<div class="value">${timeAgo(fullUser.created_at)}</div>
-			</div>`
-		: `<p class="meta">Not signed in</p>`}
-</div>
-
-<div class="card">
-	<h2 style="margin-top:0">Cloud providers</h2>
-	<div class="settings-row" style="align-items:flex-start;padding:20px 0">
-		<div class="label">
-			<strong>Hetzner Cloud</strong>
-			<small>Your personal API token for provisioning VMs in your Hetzner Cloud project. Encrypted at rest with AES-256-GCM.</small>
+${fullUser
+	? `<div class="connected-account">
+		<div class="ca-icon">
+			<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+			<span class="ca-pulse" title="Active session"></span>
 		</div>
-		<div class="value" style="text-align:right">
+		<div class="ca-info">
+			<div class="ca-name">@${escape(fullUser.username)}</div>
+			<div class="ca-meta">
+				<span class="ca-provider">GitHub</span>
+				<span class="ca-sep">·</span>
+				<span>joined ${timeAgo(fullUser.created_at)}</span>
+				${passkeys.length > 0 ? `<span class="ca-sep">·</span><span>${passkeys.length} passkey${passkeys.length === 1 ? "" : "s"}</span>` : ""}
+				<span class="ca-sep">·</span>
+				<span>session 30d</span>
+			</div>
+		</div>
+		<a class="ca-logout" href="/api/auth/logout" title="Sign out of void">Sign out</a>
+	</div>`
+	: `<p class="meta">Not signed in</p>`}
+
+<div class="card" style="padding:28px 28px">
+	<h2 style="margin-top:0">Cloud providers</h2>
+	<p class="meta" style="margin:0 0 20px;font-size:0.85rem;line-height:1.5">Connect a cloud provider to provision servers. Your API token is encrypted at rest with AES-256-GCM and only used to call the provider's API for your account.</p>
+
+	<div class="provider-widget">
+		<a class="pw-icon" href="https://console.hetzner.cloud" target="_blank" rel="noopener" title="Open Hetzner Cloud Console">
+			<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+				<rect width="32" height="32" rx="6" fill="#D50C2D"/>
+				<path d="M9 7v18h3v-7h8v7h3V7h-3v8h-8V7z" fill="white"/>
+			</svg>
+			${hetznerCred ? '<span class="pw-pulse" title="Connected"></span>' : ''}
+		</a>
+		<div class="pw-info">
+			<div class="pw-name">Hetzner Cloud <span class="pw-tag">Official</span></div>
+			<div class="pw-meta">
+				${
+					hetznerCred
+						? `<span class="pw-status-ok">✓ Token saved ${timeAgo(hetznerCred.created_at)}</span>${hetznerCred.verified_datacenters ? `<span class="pw-sep">·</span><span>${hetznerCred.verified_datacenters} datacenters reachable</span>` : ""}`
+						: `<span class="pw-status-missing">Not configured</span><span class="pw-sep">·</span><span>Add your API token to provision VMs</span>`
+				}
+			</div>
+		</div>
+		<div class="pw-action">
 			${
 				hetznerCred
-					? `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
-						<span class="meta">✓ Token saved ${timeAgo(hetznerCred.created_at)}</span>
-						${hetznerCred.verified_datacenters ? `<span class="meta" style="color:#0a8">${hetznerCred.verified_datacenters} datacenters reachable</span>` : ""}
-					</div>
-					<form method="POST" action="/settings/hetzner/delete" style="margin-top:8px" onsubmit="return confirm('Delete Hetzner API token? New server creates will fall back to env HETZNER_TOKEN if set, otherwise use stub mode.')">
-						<button type="submit" class="btn btn-secondary" style="padding:6px 12px;font-size:0.85rem">Delete token</button>
-					</form>`
-					: `<form method="POST" action="/settings/hetzner" id="hetzner-form" style="display:flex;gap:8px;align-items:flex-start">
-							<div style="flex:1;position:relative">
-								<input type="password" name="token" id="hetzner-token" placeholder="hcloud_xxxxxxxxxxxxxxxx" autocomplete="off" spellcheck="false" style="width:100%;padding:8px 32px 8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-family:ui-monospace,monospace;font-size:0.85rem;box-sizing:border-box">
-								<span id="hetzner-check" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:0.9rem;pointer-events:none;display:none"></span>
-							</div>
-							<button type="button" id="hetzner-test" class="btn btn-secondary" style="padding:8px 14px" disabled>Test</button>
-							<button type="submit" id="hetzner-submit" class="btn btn-primary" style="padding:8px 14px" disabled>Save</button>
-						</form>
-						<small id="hetzner-error" style="display:block;margin-top:6px;color:#f55;min-height:1em;font-size:0.8rem"></small>
-						<small id="hetzner-hint" style="display:block;margin-top:6px;color:#666">Get a token at <a href="https://console.hetzner.cloud" target="_blank" rel="noopener" style="color:#6cf">console.hetzner.cloud</a> → Security → API Tokens</small>
-						${env.HETZNER_TOKEN ? `<small style="display:block;margin-top:8px;color:#666">Tip: env HETZNER_TOKEN is also set as a fallback for this deployment.</small>` : ""}
-						<script>
-						(function(){
-							var input = document.getElementById('hetzner-token');
-							var submit = document.getElementById('hetzner-submit');
-							var testBtn = document.getElementById('hetzner-test');
-							var check = document.getElementById('hetzner-check');
-							var error = document.getElementById('hetzner-error');
-							var form = document.getElementById('hetzner-form');
-							// Hetzner issues both hcloud_ (Cloud API) and app_ (newer Application
-							// tokens). Don't hardcode a prefix — just check it's long enough
-							// and contains only token-safe characters. The real verification
-							// happens server-side via the Hetzner API on Test/Save.
-							var pattern = /^[A-Za-z0-9_=+-]{30,}$/;
-							function validate(){
-								var v = input.value.trim();
-								if(!v){submit.disabled=true;testBtn.disabled=true;check.style.display='none';input.style.borderColor='#333';error.textContent='';return}
-								if(pattern.test(v)){
-									submit.disabled=false;testBtn.disabled=false;check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
-									input.style.borderColor='#1f6b3d';error.textContent='';
-								} else {
-									submit.disabled=true;testBtn.disabled=true;
-									input.style.borderColor='#6b1f1f';
-									if(v.length<30) error.textContent='Token too short';
-									else error.textContent='Invalid characters in token (only letters, digits, _, =, +, -)';
-								}
-							}
-							input.addEventListener('input', validate);
-							form.addEventListener('submit', function(e){
-								if(!pattern.test(input.value.trim())){e.preventDefault();input.focus();return false}
-							});
-							// Test button: posts to /settings/hetzner/test via fetch, shows result inline
-							testBtn.addEventListener('click', function(){
-								if(!pattern.test(input.value.trim()))return;
-								var orig = testBtn.textContent; testBtn.disabled=true; testBtn.textContent='Testing…';
-								var fd = new FormData(); fd.append('token', input.value.trim());
-								fetch('/settings/hetzner/test', { method:'POST', body: fd })
-									.then(function(r){ return r.json().then(function(j){return{ok:r.ok,json:j}}) })
-									.then(function(res){
-										if(res.ok && res.json && res.json.ok){
-											check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
-											input.style.borderColor='#1f6b3d';error.style.color='#0f0';
-											error.textContent='Token works — verified by Hetzner API ('+(res.json.datacenters||0)+' datacenters reachable)';
-										} else {
-											check.style.display='none';input.style.borderColor='#6b1f1f';
-											error.style.color='#f55';
-											error.textContent=(res.json && res.json.reason) || 'Verification failed';
-										}
-									})
-									.catch(function(e){
-										check.style.display='none';input.style.borderColor='#6b1f1f';
-										error.style.color='#f55';error.textContent='Network error: '+(e.message||e);
-									})
-									.finally(function(){ testBtn.disabled=false; testBtn.textContent=orig; });
-							});
-						})();
-						</script>`
+					? `<form method="POST" action="/settings/hetzner/delete" onsubmit="return confirm('Delete Hetzner API token? New server creates will fall back to env HETZNER_TOKEN if set, otherwise use stub mode.')">
+							<button type="submit" class="btn btn-secondary" style="padding:8px 14px;font-size:0.85rem">Delete token</button>
+						</form>`
+					: ``
 			}
 		</div>
 	</div>
+
+	${
+		!hetznerCred
+			? `<form method="POST" action="/settings/hetzner" id="hetzner-form" style="margin-top:16px;display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+					<div style="flex:1;min-width:240px;position:relative">
+						<input type="password" name="token" id="hetzner-token" placeholder="hcloud_xxxxxxxxxxxxxxxx" autocomplete="off" spellcheck="false" style="width:100%;padding:10px 32px 10px 12px;background:#000;border:1px solid #333;border-radius:8px;color:#fff;font-family:ui-monospace,monospace;font-size:0.9rem;box-sizing:border-box">
+						<span id="hetzner-check" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:0.95rem;pointer-events:none;display:none"></span>
+					</div>
+					<button type="button" id="hetzner-test" class="btn btn-secondary" style="padding:10px 16px" disabled>Test</button>
+					<button type="submit" id="hetzner-submit" class="btn btn-primary" style="padding:10px 16px" disabled>Save</button>
+				</form>
+				<small id="hetzner-error" style="display:block;margin-top:8px;color:#f55;min-height:1em;font-size:0.8rem"></small>
+				<small id="hetzner-hint" style="display:block;margin-top:8px;color:#666;font-size:0.8rem">Get a token at <a href="https://console.hetzner.cloud" target="_blank" rel="noopener" style="color:#D50C2D">console.hetzner.cloud</a> → Security → API Tokens</small>
+				${env.HETZNER_TOKEN ? `<small style="display:block;margin-top:8px;color:#666;font-size:0.8rem">Tip: env HETZNER_TOKEN is also set as a fallback for this deployment.</small>` : ""}
+				<script>
+				(function(){
+					var input = document.getElementById('hetzner-token');
+					var submit = document.getElementById('hetzner-submit');
+					var testBtn = document.getElementById('hetzner-test');
+					var check = document.getElementById('hetzner-check');
+					var error = document.getElementById('hetzner-error');
+					var form = document.getElementById('hetzner-form');
+					var pattern = /^[A-Za-z0-9_=+-]{30,}$/;
+					function validate(){
+						var v = input.value.trim();
+						if(!v){submit.disabled=true;testBtn.disabled=true;check.style.display='none';input.style.borderColor='#333';error.textContent='';return}
+						if(pattern.test(v)){
+							submit.disabled=false;testBtn.disabled=false;check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
+							input.style.borderColor='#1f6b3d';error.textContent='';
+						} else {
+							submit.disabled=true;testBtn.disabled=true;
+							input.style.borderColor='#6b1f1f';
+							if(v.length<30) error.textContent='Token too short';
+							else error.textContent='Invalid characters in token (only letters, digits, _, =, +, -)';
+						}
+					}
+					input.addEventListener('input', validate);
+					form.addEventListener('submit', function(e){
+						if(!pattern.test(input.value.trim())){e.preventDefault();input.focus();return false}
+					});
+					testBtn.addEventListener('click', function(){
+						if(!pattern.test(input.value.trim()))return;
+						var orig = testBtn.textContent; testBtn.disabled=true; testBtn.textContent='Testing…';
+						var fd = new FormData(); fd.append('token', input.value.trim());
+						fetch('/settings/hetzner/test', { method:'POST', body: fd })
+							.then(function(r){ return r.json().then(function(j){return{ok:r.ok,json:j}}) })
+							.then(function(res){
+								if(res.ok && res.json && res.json.ok){
+									check.textContent='✓';check.style.color='#0f0';check.style.display='inline';
+									input.style.borderColor='#1f6b3d';error.style.color='#0f0';
+									error.textContent='Token works — verified by Hetzner API ('+(res.json.datacenters||0)+' datacenters reachable)';
+								} else {
+									check.style.display='none';input.style.borderColor='#6b1f1f';
+									error.style.color='#f55';
+									error.textContent=(res.json && res.json.reason) || 'Verification failed';
+								}
+							})
+							.catch(function(e){
+								check.style.display='none';input.style.borderColor='#6b1f1f';
+								error.style.color='#f55';error.textContent='Network error: '+(e.message||e);
+							})
+							.finally(function(){ testBtn.disabled=false; testBtn.textContent=orig; });
+					});
+				})();
+				</script>`
+			: ``
+	}
 </div>
 
 <div class="card">
-	<h2 style="margin-top:0">Authentication</h2>
-	<div class="settings-row">
-		<div class="label">Sign-in method<small>How you authenticate</small></div>
-		<div class="value">GitHub OAuth</div>
-	</div>
-	<div class="settings-row">
-		<div class="label">Session lifetime<small>Cookie TTL</small></div>
-		<div class="value">30 days</div>
-	</div>
-	<div class="actions" style="margin-top:16px">
-		<a href="/api/auth/logout" class="btn btn-secondary">Sign out</a>
-	</div>
+	<h2 style="margin-top:0">Passkeys</h2>
+	<p class="meta" style="margin:0 0 16px;font-size:0.85rem">Use your device's biometric (TouchID, FaceID, Windows Hello) or a hardware key to sign in — no password, no GitHub round-trip.</p>
+
+	${passkeys.length === 0
+		? `<p class="meta" style="margin:0 0 16px">No passkeys yet. Add one below.</p>`
+		: `<table style="margin-bottom:16px">
+			<thead><tr><th>Name</th><th>Added</th><th>Last used</th><th></th></tr></thead>
+			<tbody>
+			${passkeys
+				.map(
+					(p) => `<tr>
+					<td><strong>${escape(p.name)}</strong></td>
+					<td class="meta">${timeAgo(p.created_at)}</td>
+					<td class="meta">${p.last_used_at ? timeAgo(p.last_used_at) : "never"}</td>
+					<td>
+						<form method="POST" action="/api/passkey/delete" style="display:inline" onsubmit="return confirm('Delete this passkey? You will not be able to use it to sign in anymore.')">
+							<input type="hidden" name="id" value="${escape(p.id)}">
+							<button type="submit" class="btn btn-secondary" style="padding:4px 10px;font-size:0.8rem">delete</button>
+						</form>
+					</td>
+				</tr>`,
+				)
+				.join("")}
+			</tbody>
+		</table>`}
+
+	<form id="passkey-add-form" onsubmit="addPasskey(event)" style="display:flex;gap:8px;align-items:center">
+		<input type="text" id="passkey-name" placeholder="MacBook TouchID, iPhone 15 Pro, YubiKey 5..." maxlength="64" autocomplete="off" style="flex:1;padding:8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-size:0.9rem;font-family:inherit;box-sizing:border-box">
+		<button type="submit" id="passkey-add-btn" class="btn btn-primary" style="padding:8px 14px">+ Add passkey</button>
+	</form>
+	<small id="passkey-msg" style="display:block;margin-top:8px;font-size:0.85rem;min-height:1.2em"></small>
 </div>
 
 <div class="card">
@@ -906,11 +1325,334 @@ ${toast}
 		<button class="btn btn-danger" disabled>Delete account</button>
 	</div>
 </div>
+
+<!-- Passkey JS — loaded as a module from jsdelivr's +esm endpoint.
+     startRegistration handles all base64url ↔ ArrayBuffer conversion
+     and the create() / get() Promise wrappers. -->
+<script type="module">
+import { startRegistration } from 'https://cdn.jsdelivr.net/npm/@simplewebauthn/browser@13.1.0/+esm';
+
+window.addPasskey = async function(e) {
+  e.preventDefault();
+  const nameEl = document.getElementById('passkey-name');
+  const btn = document.getElementById('passkey-add-btn');
+  const msg = document.getElementById('passkey-msg');
+  const name = (nameEl.value || '').trim() || 'Passkey';
+  msg.style.color = '#888';
+  msg.textContent = 'Starting…';
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = 'Working…';
+  try {
+    const optsResp = await fetch('/api/passkey/register/start', { method: 'POST' });
+    if (!optsResp.ok) {
+      const j = await optsResp.json().catch(() => ({}));
+      throw new Error(j.error || ('HTTP ' + optsResp.status));
+    }
+    const opts = await optsResp.json();
+    let attResp;
+    try {
+      attResp = await startRegistration({ optionsJSON: opts });
+    } catch (regErr) {
+      throw new Error(regErr && regErr.name === 'NotAllowedError'
+        ? 'Cancelled or no authenticator available'
+        : ((regErr && regErr.message) || 'Registration failed'));
+    }
+    const verifyResp = await fetch('/api/passkey/register/finish', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, response: attResp })
+    });
+    const result = await verifyResp.json();
+    if (!result.ok) throw new Error(result.error || 'Verification failed');
+    msg.style.color = '#0f0';
+    msg.textContent = '✓ Passkey added — reloading…';
+    setTimeout(() => location.reload(), 600);
+  } catch (err) {
+    msg.style.color = '#f55';
+    msg.textContent = '✕ ' + (err.message || err);
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+};
+</script>
 `;
 
 	return html(body, "Settings", {
 		user,
 		current: "/settings",
+		currentProject,
+		projects: projects.results,
+	});
+}
+
+// ============================================================
+// New server (provisioning wizard)
+// ============================================================
+
+/**
+ * /servers/new — pick a Hetzner location, size, image, and name; submit
+ * to create a real VM. Catalog is fetched from the Hetzner API (cached
+ * in KV) using the user's per-user token if set, else env HETZNER_TOKEN.
+ *
+ * If no token is available anywhere, the form is replaced with a
+ * friendly "add your token first" message and a link to /settings.
+ */
+export async function renderNewServerPage(
+	c: any,
+	user: { id: string; username: string; avatar_url: string | null } | null,
+	opts: {
+		error?: string | null;
+		values?: { name?: string; region?: string; size?: string; image?: string };
+	} = {},
+): Promise<Response> {
+	const env = c.env;
+	const { getCurrentProject } = await import("./state");
+	const currentProject = await getCurrentProject(c);
+	const projects = user ? await env.void_db
+		.prepare("SELECT id, name, slug FROM projects WHERE user_id = ? ORDER BY created_at DESC")
+		.bind(user.id)
+		.all<{ id: string; name: string; slug: string }>() : { results: [] };
+
+	const { getProviderToken } = await import("./credentials");
+	const { listServerTypes, listLocations, listImages } = await import("./hetzner");
+
+	const token = user
+		? await getProviderToken(env, user.id, "hetzner")
+		: (env.HETZNER_TOKEN || null);
+
+	// Flash toast (e.g. "Catalog refreshed") — read from ?toast=&msg= query
+	const flashKind = c.req.query("toast");
+	const flashMsg = c.req.query("msg");
+	const toast = flashKind && flashMsg
+		? `<div class="toast toast-${escape(flashKind)}" id="toast">
+			<span class="toast-icon">${flashKind === "success" ? "✓" : "✕"}</span>
+			<span class="toast-msg">${escape(flashMsg)}</span>
+			<button type="button" class="toast-close" onclick="document.getElementById('toast').remove()" aria-label="Dismiss">×</button>
+		</div>
+		<script>setTimeout(function(){var t=document.getElementById('toast');if(t)t.remove()},6000)</script>`
+		: "";
+
+	let types: any[] = [];
+	let locations: any[] = [];
+	let images: any[] = [];
+	let catalogError: string | null = null;
+
+	if (token) {
+		try {
+			[types, locations, images] = await Promise.all([
+				listServerTypes(env, token),
+				listLocations(env, token),
+				listImages(env, token, { architecture: "x86" }),
+			]);
+		} catch (e: any) {
+			catalogError = e?.message || String(e);
+		}
+	}
+
+	const v = opts.values || {};
+	const selRegion = (r: string) => v.region === r ? "checked" : "";
+	const selSize = (s: string) => v.size === s ? "checked" : (v.size ? "" : (s === "cx22" ? "checked" : ""));
+
+	// Pick the default image: highest-version Ubuntu LTS in the catalog.
+	// If no Ubuntu is offered, fall back to the first image. The void
+	// agent is built and tested on Ubuntu LTS — other distros may work
+	// but are advanced/experimental.
+	const pickDefaultImage = (imgs: any[]): string => {
+		const ubuntus = imgs.filter((i) => i.os_flavor === "ubuntu");
+		const pool = ubuntus.length ? ubuntus : imgs;
+		if (!pool.length) return "ubuntu-24.04";
+		const scored = pool
+			.map((i) => {
+				const m = (i.name || "").match(/(\d+)\.(\d+)/);
+				return m ? { name: i.name, score: parseInt(m[1]) * 100 + parseInt(m[2]) } : { name: i.name, score: 0 };
+			})
+			.sort((a, b) => b.score - a.score);
+		return scored[0].name;
+	};
+	const defaultImage = pickDefaultImage(images);
+	const selImage = (i: string) => v.image === i ? "checked" : (v.image ? "" : (i === defaultImage ? "checked" : ""));
+
+	// No token at all → "add token" card
+	const body = !token
+		? `
+<h1>New server</h1>
+<div class="card">
+	<div style="text-align:center;padding:40px 20px">
+		<div style="font-size:3rem;margin-bottom:16px;color:#D50C2D;opacity:0.6">⚠</div>
+		<h2 style="margin:0 0 12px;color:#fff;font-size:1.25rem;text-transform:none">Hetzner token required</h2>
+		<p class="meta" style="margin:0 0 20px;max-width:480px;margin-left:auto;margin-right:auto">
+			To provision real Hetzner Cloud VMs we need an API token with read+write scope.
+			Add yours in <a href="/settings" style="color:#6cf">/settings → Cloud providers</a>,
+			or ask the operator to set the <code>HETZNER_TOKEN</code> env var for server-wide use.
+		</p>
+		<a href="/settings" class="btn btn-primary">Add Hetzner token</a>
+	</div>
+</div>
+`
+		: `
+${toast}
+<h1>New server</h1>
+<div class="actions" style="margin-bottom:16px;align-items:center">
+  <form method="POST" action="/api/hetzner/catalog/refresh" style="display:inline" title="Force-refresh server types, locations, and images from Hetzner (1h cache by default)">
+    <button class="btn btn-secondary" type="submit" style="padding:6px 12px;font-size:0.78rem">⟳ Refresh catalog</button>
+  </form>
+  <label style="display:inline-flex;align-items:center;gap:6px;color:#888;font-size:0.82rem;margin-left:8px;cursor:pointer">
+    <input type="checkbox" id="show-all-types" style="accent-color:#0f8"> Show all server types
+  </label>
+  <span class="meta" style="margin-left:auto;font-size:0.75rem">Default: under €50/mo · Catalog cached 1h per token</span>
+</div>
+<p class="meta" style="margin:0 0 20px">Pick a location, server type, image, and a name. Provisioning takes ~30 seconds. Agent auto-registers when cloud-init completes.</p>
+
+${opts.error ? `<div class="form-error">✕ ${escape(opts.error)}</div>` : ""}
+${catalogError ? `<div class="form-error">✕ Failed to load Hetzner catalog: ${escape(catalogError)}. Check your token in <a href="/settings" style="color:#6cf;text-decoration:underline">/settings</a>.</div>` : ""}
+
+<form method="POST" action="/servers/new" id="new-server-form">
+	<div class="form-section">
+		<h2>Location</h2>
+		<p class="form-hint">Where to physically provision the VM. Closer = lower latency.</p>
+		<div class="option-grid cols-4">
+		${locations
+			.map(
+				(loc) => `<label class="option-card">
+					<input type="radio" name="region" value="${escape(loc.name)}" ${selRegion(loc.name) || (!v.region && loc.name === "fsn1") ? "checked" : ""}>
+					<div class="oc-name">${escape(loc.name.toUpperCase())}</div>
+					<div class="oc-sub">${escape(loc.city)} · ${escape(loc.country)}</div>
+					<span class="oc-check"></span>
+				</label>`,
+			)
+			.join("")}
+		</div>
+	</div>
+
+	<div class="form-section">
+		<h2>Server type</h2>
+		<p class="form-hint">vCPU + RAM + SSD. List is filtered by your selected location.</p>
+		<div class="option-grid cols-3" id="type-grid">
+		${types
+			.map(
+				(t) => `<label class="option-card" data-locations="${escape(t.available_locations.join(","))}" data-price="${t.price_monthly}">
+					<input type="radio" name="size" value="${escape(t.name)}" ${selSize(t.name)}>
+					<div class="oc-name">${escape(t.name)}</div>
+					<div class="oc-specs"><span>${t.cores} vCPU</span><span>${t.memory} GB RAM</span><span>${t.disk} GB SSD</span></div>
+					<div class="oc-price">${escape(t.price_display)}</div>
+					<span class="oc-check"></span>
+				</label>`,
+			)
+			.join("")}
+		</div>
+		<small id="type-empty" style="display:none;color:#f90;margin-top:8px">No server types under €50/mo available in this location. Toggle "Show all" or try a different one.</small>
+	</div>
+
+	<details class="adv">
+		<summary>
+			<strong>Advanced</strong>
+			<span class="adv-summary">Image: <code id="adv-image">${escape((v.image || defaultImage))}</code></span>
+		</summary>
+		<div class="adv-body">
+			<p class="form-hint" style="margin-top:0">OS image. The void-agent is built and tested on Ubuntu LTS — the default is the latest LTS available. Other distros work but are experimental.</p>
+			${images
+				.map(
+					(img) => `<label class="option-row">
+						<input type="radio" name="image" value="${escape(img.name)}" ${selImage(img.name)} onchange="document.getElementById('adv-image').textContent = this.value">
+						<div class="or-name">${escape(img.name)}</div>
+						<div class="or-sub">${escape(img.os_flavor)}${img.os_version ? " " + escape(img.os_version) : ""}${img.rapid_deploy ? " · rapid deploy" : ""}</div>
+					</label>`,
+				)
+				.join("")}
+		</div>
+	</details>
+
+	<div class="form-section">
+		<h2>Name</h2>
+		<p class="form-hint">Lowercase letters, digits, dashes. 1-32 chars. Used in agent config and DNS.</p>
+		<input type="text" name="name" id="name-input" class="form-input" placeholder="my-server" value="${escape(v.name || "")}" required pattern="[a-z][a-z0-9-]{0,31}" maxlength="32" autocomplete="off" spellcheck="false">
+	</div>
+
+	<div class="form-actions">
+		<a href="/servers" class="btn btn-secondary">Cancel</a>
+		<button type="submit" class="btn btn-primary" id="submit-btn">Create server</button>
+	</div>
+</form>
+
+<script>
+// Disable the submit button on submit to prevent double-clicks, and
+// generate a default name from the selected region+type if the user
+// didn't fill in one.
+(function(){
+  var form = document.getElementById('new-server-form');
+  if (!form) return;
+  var submit = document.getElementById('submit-btn');
+  var nameInput = document.getElementById('name-input');
+  var typeGrid = document.getElementById('type-grid');
+  var typeEmpty = document.getElementById('type-empty');
+
+  // Filter the server type list by:
+  //   1. selected location (data-locations)
+  //   2. price ≤ 50 EUR/mo (data-price) — keep the default view focused
+  //      on cheap shared instances; user can toggle "Show all" to see
+  //      dedicated/large types
+  // "Show all types" checkbox bypasses both filters.
+  function filterTypes(){
+    if (!typeGrid) return;
+    if (showAll && showAll.checked) {
+      // Escape hatch — show every type, no filtering
+      typeGrid.querySelectorAll('.option-card[data-locations]').forEach(function(card){
+        card.style.display = '';
+      });
+      if (typeEmpty) typeEmpty.style.display = 'none';
+      return;
+    }
+    var regionEl = form.querySelector('input[name="region"]:checked');
+    var region = regionEl ? regionEl.value : '';
+    if (!region) return;
+    var priceLimit = 50; // EUR/mo
+    var firstVisible = null;
+    var cards = typeGrid.querySelectorAll('.option-card[data-locations]');
+    cards.forEach(function(card){
+      var locs = (card.getAttribute('data-locations') || '').split(',');
+      var price = parseFloat(card.getAttribute('data-price') || '999');
+      var ok = locs.indexOf(region) !== -1 && price <= priceLimit;
+      card.style.display = ok ? '' : 'none';
+      if (ok && !firstVisible) firstVisible = card;
+    });
+    // Auto-pick the first visible type, and clear the name if it was
+    // auto-generated from a now-hidden type so the user sees the new pick.
+    if (firstVisible) {
+      var input = firstVisible.querySelector('input[type="radio"]');
+      if (input) input.checked = true;
+    }
+    if (typeEmpty) typeEmpty.style.display = firstVisible ? 'none' : 'block';
+  }
+
+  // Re-filter when the user picks a different location
+  form.querySelectorAll('input[name="region"]').forEach(function(r){
+    r.addEventListener('change', filterTypes);
+  });
+  // "Show all types" escape hatch — bypass the per-location filter
+  // when the user has been bitten by it (Hetzner inventory ≠ pricing).
+  var showAll = document.getElementById('show-all-types');
+  if (showAll) {
+    showAll.addEventListener('change', filterTypes);
+  }
+  filterTypes(); // initial pass
+
+  form.addEventListener('submit', function(){
+    if (!nameInput.value.trim()) {
+      var region = (form.querySelector('input[name="region"]:checked') || {}).value || 'srv';
+      var size = (form.querySelector('input[name="size"]:checked') || {}).value || 'cx';
+      nameInput.value = (region + '-' + size).toLowerCase();
+    }
+    submit.disabled = true;
+    submit.textContent = 'Provisioning…';
+  });
+})();
+</script>
+`;
+
+	return html(body, "New server", {
+		user,
+		current: "/servers",
 		currentProject,
 		projects: projects.results,
 	});

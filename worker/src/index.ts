@@ -35,6 +35,8 @@ import {
 	handleAuthLogout,
 	renderLandingHtml,
 	requireBearer,
+	createSession,
+	SESSION_COOKIE_OPTS,
 } from "./auth";
 import {
 	renderServersPage,
@@ -43,6 +45,7 @@ import {
 	renderDeploymentLogsPage,
 	renderDashboardPage,
 	renderSettingsPage,
+	renderNewServerPage,
 } from "./ui";
 
 export { VoidCell };
@@ -104,13 +107,24 @@ const bearerOnly = async (c: any, next: any) => {
 	await next();
 };
 
-// Apply bearer to all /api/<something>/* except /api/auth/* (session cookie)
-// and /api/webhooks/* (HMAC). Note: Hono's `/api/*` matches `/api` itself too,
-// so we guard with an explicit check.
+// Apply bearer to all /api/<something>/* except:
+//   - /api/auth/*       (session cookie)
+//   - /api/webhooks/*   (HMAC)
+//   - /api/passkey/*    (login is public, register/delete use session —
+//                        each route handler enforces its own auth)
+//   - /api/hetzner/*    (UI form actions, session cookie — handlers
+//                        enforce their own session check)
+// Note: Hono's `/api/*` matches `/api` itself too, so we guard with
+// an explicit check.
 app.use("/api/*", async (c, next) => {
 	const p = c.req.path;
 	if (p === "/api" || p === "/api/") return next();
-	if (p.startsWith("/api/auth/") || p.startsWith("/api/webhooks/")) return next();
+	if (
+		p.startsWith("/api/auth/") ||
+		p.startsWith("/api/webhooks/") ||
+		p.startsWith("/api/passkey/") ||
+		p.startsWith("/api/hetzner/")
+	) return next();
 	return bearerOnly(c, next);
 });
 
@@ -293,6 +307,25 @@ app.get("/api/servers", async (c) => {
 	return c.json({ servers: results });
 });
 
+// JSON variant for the /servers page auto-poll. Same shape as the cards.
+// Requires session (cookie) — used by the in-page JS, no Bearer needed.
+app.get("/api/servers-ui", requireSession, async (c) => {
+	const user = c.get("user");
+	const { results } = await c.env.void_db
+		.prepare(
+			`SELECT s.id, s.name, s.status, s.region, s.size, s.last_seen_at,
+			        s.hetzner_project_name, s.provider_server_id, s.ip_address,
+			        s.cpu, s.memory, s.disk,
+			        (SELECT COUNT(*) FROM deployments d WHERE d.server_id = s.id) AS deployment_count
+			 FROM servers s
+			 WHERE s.user_id = ?
+			 ORDER BY s.created_at DESC`,
+		)
+		.bind(user.id)
+		.all();
+	return c.json({ servers: results });
+});
+
 // ============================================================
 // UI pages (require session cookie)
 // ============================================================
@@ -302,7 +335,88 @@ app.get("/dashboard", requireSession, async (c) => {
 });
 
 app.get("/servers", requireSession, async (c) => {
-	return renderServersPage(c, c.get("user"));
+	return renderServersPage(c, c.get("user"), {
+		kind: c.req.query("toast") || null,
+		msg: c.req.query("msg") || null,
+	});
+});
+
+// GET /servers/new — provisioning wizard. Fetches the Hetzner catalog
+// (cached in KV), renders location/size/image/name selectors.
+app.get("/servers/new", requireSession, async (c) => {
+	return renderNewServerPage(c, c.get("user"));
+});
+
+// POST /api/hetzner/catalog/refresh — force-refresh the Hetzner catalog
+// cache for the calling user's token. Hits the live API and re-populates
+// the KV entries. Useful when the user added a new project / type / image
+// in the Hetzner console and the cached catalog is stale.
+app.post("/api/hetzner/catalog/refresh", requireSession, async (c) => {
+	const user = c.get("user");
+	const { getProviderToken } = await import("./credentials");
+	const { invalidateCatalogCache, listServerTypes, listLocations, listImages } = await import(
+		"./hetzner"
+	);
+	const token = await getProviderToken(c.env, user.id, "hetzner");
+	if (!token) {
+		return c.redirect("/servers/new?toast=error&msg=No+Hetzner+token+configured");
+	}
+	try {
+		await invalidateCatalogCache(c.env, token);
+		// Warm the cache with fresh data so the next page load is instant
+		await Promise.all([
+			listServerTypes(c.env, token),
+			listLocations(c.env, token),
+			listImages(c.env, token, { architecture: "x86" }),
+		]);
+		return c.redirect("/servers/new?toast=success&msg=Catalog+refreshed+from+Hetzner");
+	} catch (e: any) {
+		return c.redirect(
+			`/servers/new?toast=error&msg=${encodeURIComponent("Refresh failed: " + (e?.message || e))}`,
+		);
+	}
+});
+
+// POST /servers/new — create the server. Validates form data, calls
+// the shared createServerForUser(), redirects to /servers on success.
+app.post("/servers/new", requireSession, async (c) => {
+	const user = c.get("user");
+	const form = await c.req.parseBody();
+	const f = form as Record<string, string>;
+	const name = String(f.name || "").trim();
+	const region = String(f.region || "").trim();
+	const size = String(f.size || "").trim();
+	const image = String(f.image || "").trim();
+
+	// Server-side validation (defense in depth — UI also validates)
+	if (!/^[a-z][a-z0-9-]{0,31}$/.test(name)) {
+		return renderNewServerPage(c, user, { error: "Name must be 1-32 chars, lowercase, start with a letter", values: { name, region, size, image } });
+	}
+	if (!region || !size || !image) {
+		return renderNewServerPage(c, user, { error: "Please pick a location, server type, and image", values: { name, region, size, image } });
+	}
+
+	try {
+		const { createServerForUser } = await import("./server-create");
+		const result = await createServerForUser(
+			c.env,
+			user.id,
+			{ name, size, region, image },
+			c.req.url,
+		);
+		const msg = result.mode === "stub"
+			? `Stub server '${name}' created (no Hetzner token — no real VM).`
+			: `Server '${name}' provisioning — agent will auto-register in ~30-60s.`;
+		return c.redirect(`/servers?toast=success&msg=${encodeURIComponent(msg)}`);
+	} catch (e: any) {
+		// Always append the submitted form values to the error so the
+		// user can paste the whole thing (original error + what we
+		// tried) into a bug report without retyping. The CSS uses
+		// `white-space: pre-line` so the indented block renders cleanly.
+		const submitted = `\n\nSubmitted:\n  name:   ${name}\n  region: ${region}\n  size:   ${size}\n  image:  ${image}`;
+		const errMsg = (e?.message || String(e)) + submitted;
+		return renderNewServerPage(c, user, { error: errMsg, values: { name, region, size, image } });
+	}
 });
 
 app.get("/projects", requireSession, async (c) => {
@@ -410,6 +524,285 @@ a{color:#6cf;display:inline-block;margin-top:16px}</style></head>
 <div class="warn">The agent has been disconnected. Update <code>&lt;state_dir&gt;/session_token</code> on the agent host with the new token, then restart the agent.</div>
 <a href="/servers">Back to servers</a>
 </div></body></html>`);
+});
+
+// POST /servers/:id/delete — full delete (Hetzner + void).
+// Tries to delete the VM in Hetzner first (best-effort: ignores 404,
+// tolerates other errors so the user can still clean up the void row).
+// Then hard-deletes the D1 row. Deployments stay for history (orphaned
+// but visible until cleaned up separately).
+app.post("/servers/:id/delete", requireSession, async (c) => {
+	const user = c.get("user");
+	const serverId = c.req.param("id");
+	const env = c.env;
+
+	const srv = await env.void_db
+		.prepare("SELECT id, name, provider_server_id FROM servers WHERE id = ? AND user_id = ?")
+		.bind(serverId, user.id)
+		.first<{ id: string; name: string; provider_server_id: string | null }>();
+	if (!srv) return c.redirect("/servers?toast=error&msg=server+not+found");
+
+	let hetznerMsg = "";
+	if (srv.provider_server_id) {
+		try {
+			const { getProviderToken } = await import("./credentials");
+			const { deleteServer } = await import("./hetzner");
+			const token = await getProviderToken(env, user.id, "hetzner");
+			if (token) {
+				await deleteServer(token, parseInt(srv.provider_server_id, 10));
+				hetznerMsg = "VM deleted in Hetzner.";
+			} else {
+				hetznerMsg = "No Hetzner token available — only void row removed.";
+			}
+		} catch (e: any) {
+			const msg = String(e?.message || e);
+			if (msg.includes("not found") || msg.includes("404")) {
+				hetznerMsg = "VM was already gone in Hetzner.";
+			} else {
+				// Token revoked, project suspended, network — let the user
+				// still clean up the void row. They can re-attempt Hetzner
+				// deletion manually from the Hetzner console.
+				hetznerMsg = `Hetzner delete failed: ${msg} (void row still removed).`;
+			}
+		}
+	} else {
+		hetznerMsg = "No Hetzner ID — void row removed only.";
+	}
+
+	// Also clear the Durable Object state (fire-and-forget — DO might be
+	// gone if the agent already disconnected, that's fine).
+	try {
+		const stub = env.void_cell.get(env.void_cell.idFromName(serverId));
+		await stub.fetch(`https://cell/${serverId}/teardown`, { method: "POST" });
+	} catch {
+		// best-effort
+	}
+
+	await env.void_db
+		.prepare("DELETE FROM servers WHERE id = ?")
+		.bind(serverId)
+		.run();
+
+	return c.redirect(
+		`/servers?toast=success&msg=${encodeURIComponent(`Server '${srv.name}' deleted. ${hetznerMsg}`)}`,
+	);
+});
+
+// POST /servers/:id/sync — re-check the server's status with Hetzner.
+// If Hetzner returns 404 (server deleted in their console, or the
+// project containing it was deleted), we mark the void row as 'destroyed'
+// so the UI can show a clear "gone" state instead of stale data.
+// Also refreshes the cached Hetzner project name in case the user
+// renamed the project in the Cloud Console.
+app.post("/servers/:id/sync", requireSession, async (c) => {
+	const user = c.get("user");
+	const serverId = c.req.param("id");
+	const env = c.env;
+
+	// 1. Look up the server and verify ownership
+	const srv = await env.void_db
+		.prepare(
+			"SELECT id, provider_server_id, status, hetzner_project_id, hetzner_project_name FROM servers WHERE id = ? AND user_id = ?",
+		)
+		.bind(serverId, user.id)
+		.first<{ id: string; provider_server_id: string | null; status: string; hetzner_project_id: number | null; hetzner_project_name: string | null }>();
+	if (!srv) return c.redirect("/servers?toast=error&msg=server+not+found");
+
+	if (!srv.provider_server_id) {
+		return c.redirect("/servers?toast=error&msg=no+hetzner+id+for+this+server");
+	}
+
+	// 2. Resolve the Hetzner token
+	const { getProviderToken } = await import("./credentials");
+	const { getServer, listProjects } = await import("./hetzner");
+	const token = await getProviderToken(env, user.id, "hetzner");
+	if (!token) {
+		return c.redirect("/servers?toast=error&msg=no+hetzner+token+configured");
+	}
+
+	// 3. Call Hetzner
+	try {
+		const hs = await getServer(token, parseInt(srv.provider_server_id, 10));
+		const now = Math.floor(Date.now() / 1000);
+		// Refresh the project name from Hetzner in case it was renamed
+		let projectName = srv.hetzner_project_name;
+		try {
+			const projects = await listProjects(env, token);
+			// Find the project that has this server — Hetzner doesn't tell
+			// us which project owns a server directly, so we re-sync the
+			// name from the same project we stored at creation time.
+			const same = projects.find((p) => p.id === srv.hetzner_project_id);
+			if (same) projectName = same.name;
+		} catch {}
+		// Also backfill cpu/memory/disk if missing (e.g. for servers
+		// created before we started storing these fields).
+		const cpu = hs.server_type?.cores ?? null;
+		const memory = hs.server_type?.memory ?? null;
+		const disk = hs.server_type?.disk ?? null;
+		await env.void_db
+			.prepare(
+				"UPDATE servers SET status = ?, last_seen_at = ?, ip_address = ?, hetzner_project_name = ?, cpu = COALESCE(cpu, ?), memory = COALESCE(memory, ?), disk = COALESCE(disk, ?) WHERE id = ?",
+			)
+			.bind(
+				hs.status,
+				now,
+				hs.public_net?.ipv4?.ip || null,
+				projectName,
+				cpu,
+				memory,
+				disk,
+				serverId,
+			)
+			.run();
+		return c.redirect(`/servers?toast=success&msg=${encodeURIComponent(`Synced · status: ${hs.status}`)}`);
+	} catch (e: any) {
+		const msg = String(e?.message || e);
+		if (msg.includes("not found") || msg.includes("404")) {
+			// Server or its project was deleted in Hetzner
+			await env.void_db
+				.prepare("UPDATE servers SET status = 'destroyed' WHERE id = ?")
+				.bind(serverId)
+				.run();
+			return c.redirect("/servers?toast=success&msg=server+no+longer+exists+in+Hetzner+(marked+as+destroyed)");
+		}
+		return c.redirect(`/servers?toast=error&msg=${encodeURIComponent(msg)}`);
+	}
+});
+
+// ============================================================
+// Passkeys (WebAuthn)
+// ============================================================
+//
+// Five routes, split between "auth required" (register, delete) and
+// "no auth" (login start/finish). All use httpOnly challenge cookies
+// scoped per-flow. The actual WebAuthn helpers live in passkey.ts.
+
+import {
+	startRegistration as pkStartRegistration,
+	finishRegistration as pkFinishRegistration,
+	startAuthentication as pkStartAuthentication,
+	finishAuthentication as pkFinishAuthentication,
+	getPasskeyByCredentialId,
+	savePasskey,
+	touchPasskey,
+	listPasskeys,
+	deletePasskey,
+	PASSKEY_REG_CHALLENGE_COOKIE,
+	PASSKEY_AUTH_CHALLENGE_COOKIE,
+	CHALLENGE_COOKIE_OPTS,
+} from "./passkey";
+
+import { setCookie as honoSetCookie, getCookie as honoGetCookie, deleteCookie as honoDeleteCookie } from "hono/cookie";
+
+// Start registration: returns WebAuthn options, stashes the challenge
+// in a short-lived httpOnly cookie. The browser then calls
+// navigator.credentials.create() with these options.
+app.post("/api/passkey/register/start", requireSession, async (c) => {
+	const user = c.get("user");
+	const env = c.env;
+	const { results } = await env.void_db
+		.prepare("SELECT credential_id FROM passkeys WHERE user_id = ?")
+		.bind(user.id)
+		.all<{ credential_id: string }>();
+	const opts = await pkStartRegistration(
+		c.req.raw,
+		user,
+		results.map((r) => r.credential_id),
+	);
+	honoSetCookie(c, PASSKEY_REG_CHALLENGE_COOKIE, opts.challenge, CHALLENGE_COOKIE_OPTS);
+	return c.json(opts);
+});
+
+// Finish registration: browser posts the navigator.credentials.create()
+// response back. We verify it, store the credential, return success.
+app.post("/api/passkey/register/finish", requireSession, async (c) => {
+	const user = c.get("user");
+	const env = c.env;
+	const challenge = honoGetCookie(c, PASSKEY_REG_CHALLENGE_COOKIE);
+	if (!challenge) return c.json({ ok: false, error: "challenge expired — try again" }, 400);
+	const body = (await c.req.json().catch(() => null)) as
+		| { name?: string; response?: unknown }
+		| null;
+	if (!body || !body.response) return c.json({ ok: false, error: "missing response" }, 400);
+	const name = (String(body.name || "").trim() || "Passkey").slice(0, 64);
+	const result = await pkFinishRegistration(c.req.raw, body.response, challenge);
+	if (!result.ok) return c.json({ ok: false, error: result.error }, 400);
+	try {
+		await savePasskey(
+			env,
+			user.id,
+			result.credential.id,
+			result.credential.publicKey,
+			result.credential.counter,
+			result.credential.transportsJson,
+			name,
+		);
+	} catch (e: any) {
+		// Unique constraint on credential_id = user re-registered the same
+		// authenticator. Should've been caught by excludeCredentials, but
+		// some platforms let you bypass it.
+		if (String(e?.message || e).includes("UNIQUE")) {
+			honoDeleteCookie(c, PASSKEY_REG_CHALLENGE_COOKIE, { path: "/" });
+			return c.json({ ok: false, error: "This passkey is already registered" }, 409);
+		}
+		throw e;
+	}
+	honoDeleteCookie(c, PASSKEY_REG_CHALLENGE_COOKIE, { path: "/" });
+	return c.json({ ok: true, name });
+});
+
+// Start login: returns options for navigator.credentials.get(). No
+// allowCredentials → discoverable credentials → browser shows a
+// passkey picker across all the user's passkeys for this RP.
+app.post("/api/passkey/login/start", async (c) => {
+	const opts = await pkStartAuthentication(c.req.raw);
+	honoSetCookie(c, PASSKEY_AUTH_CHALLENGE_COOKIE, opts.challenge, CHALLENGE_COOKIE_OPTS);
+	return c.json(opts);
+});
+
+// Finish login: verify, look up the user by credential_id, create a
+// session, set the session cookie. The browser then redirects to
+// /dashboard (or whatever redirectTo we tell it).
+app.post("/api/passkey/login/finish", async (c) => {
+	const env = c.env;
+	const challenge = honoGetCookie(c, PASSKEY_AUTH_CHALLENGE_COOKIE);
+	if (!challenge) return c.json({ ok: false, error: "challenge expired — try again" }, 400);
+	const body = (await c.req.json().catch(() => null)) as { response?: any } | null;
+	if (!body || !body.response || !body.response.id) {
+		return c.json({ ok: false, error: "missing credential" }, 400);
+	}
+	const pk = await getPasskeyByCredentialId(env, body.response.id);
+	if (!pk) return c.json({ ok: false, error: "passkey not recognized" }, 404);
+	const result = await pkFinishAuthentication(c.req.raw, body.response, challenge, pk);
+	if (!result.ok) return c.json({ ok: false, error: result.error }, 400);
+	const user = (await env.void_db
+		.prepare("SELECT id, username, avatar_url FROM users WHERE id = ?")
+		.bind(pk.user_id)
+		.first()) as { id: string; username: string; avatar_url: string | null } | null;
+	if (!user) return c.json({ ok: false, error: "user not found" }, 404);
+	await touchPasskey(env, pk.id, result.newCounter);
+	await createSession(c, user);
+	honoDeleteCookie(c, PASSKEY_AUTH_CHALLENGE_COOKIE, { path: "/" });
+	return c.json({ ok: true, redirectTo: "/dashboard" });
+});
+
+// Delete a passkey (form-encoded, redirects to /settings with toast).
+// Verifies ownership in the WHERE clause — one query, no race.
+app.post("/api/passkey/delete", requireSession, async (c) => {
+	const user = c.get("user");
+	const form = await c.req.parseBody();
+	const id = String((form as Record<string, string>)["id"] || "").trim();
+	if (!id) return c.redirect("/settings?toast=error&msg=missing+passkey+id");
+	const ok = await deletePasskey(c.env, user.id, id);
+	if (!ok) return c.redirect("/settings?toast=error&msg=passkey+not+found+or+not+yours");
+	return c.redirect("/settings?toast=success&msg=Passkey+deleted");
+});
+
+// List passkeys for the /settings page (JSON).
+app.get("/api/passkey/list", requireSession, async (c) => {
+	const user = c.get("user");
+	const passkeys = await listPasskeys(c.env, user.id);
+	return c.json({ passkeys });
 });
 
 // ============================================================
