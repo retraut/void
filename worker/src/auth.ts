@@ -322,9 +322,9 @@ export function renderLandingHtml(opts: {
 
   <div class="actions">
     ${opts.user ? `
-      <a href="/api/servers" class="btn btn-secondary" hx-get="/ui/servers" hx-target="#panel">Servers</a>
-      <a href="/api/projects" class="btn btn-secondary" hx-get="/ui/projects" hx-target="#panel">Projects</a>
-      <a href="/api/deployments" class="btn btn-secondary" hx-get="/ui/deployments" hx-target="#panel">Deployments</a>
+      <a href="/servers" class="btn btn-secondary">Servers</a>
+      <a href="/projects" class="btn btn-secondary">Projects</a>
+      <a href="/deployments" class="btn btn-secondary">Deployments</a>
       <a href="/api/auth/github?action=new-server" class="btn btn-primary">+ New Server</a>
     ` : `
       <a href="/api/auth/github" class="btn btn-primary">Get started with GitHub</a>

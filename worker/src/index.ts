@@ -16,6 +16,12 @@ import {
 	renderLandingHtml,
 	requireBearer,
 } from "./auth";
+import {
+	renderServersPage,
+	renderProjectsPage,
+	renderDeploymentsPage,
+	renderDeploymentLogsPage,
+} from "./ui";
 
 export { VoidCell };
 
@@ -136,6 +142,26 @@ export default {
 		}
 		if (path === "/api/auth/logout" && request.method === "GET") {
 			return handleAuthLogout(request, env);
+		}
+
+		// UI pages (require session cookie)
+		if (path === "/servers") {
+			const user = await getSessionUser(env, request);
+			return renderServersPage(env, user);
+		}
+		if (path === "/projects") {
+			const user = await getSessionUser(env, request);
+			return renderProjectsPage(env, user);
+		}
+		if (path === "/deployments" || path === "/deployments/") {
+			const user = await getSessionUser(env, request);
+			const projectFilter = url.searchParams.get("project");
+			return renderDeploymentsPage(env, user, projectFilter);
+		}
+		if (path.startsWith("/deployments/")) {
+			const user = await getSessionUser(env, request);
+			const id = path.slice("/deployments/".length);
+			return renderDeploymentLogsPage(env, user, id);
 		}
 
 		// API
