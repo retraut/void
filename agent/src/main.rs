@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -24,72 +24,15 @@ use tracing::{debug, error, info, warn};
 mod config;
 mod detect;
 mod keys;
+mod protocol;
 
 use config::Config;
 use keys::Identity;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum AgentOut {
-    Register {
-        server_id: String,
-        public_key: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        setup_token: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        session_token: Option<String>,
-    },
-    Heartbeat {
-        timestamp: u64,
-    },
-    Log {
-        deployment_id: String,
-        stream: String,
-        data: String,
-        line: u32,
-    },
-    DeployDone {
-        deployment_id: String,
-        status: String,
-        url: Option<String>,
-        local_url: Option<String>,
-        error: Option<String>,
-    },
-    Ready {
-        timestamp: u64,
-    },
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[allow(dead_code)]
-enum AgentIn {
-    Registered {},
-    Ping {},
-    Deploy {
-        deployment_id: String,
-        repo_url: String,
-        #[serde(default = "default_ref")]
-        ref_: String,
-        env: Option<serde_json::Value>,
-        build_command: Option<String>,
-        serve_command: Option<String>,
-        port: Option<u16>,
-        hostname: Option<String>,
-        public_url: Option<String>,
-        tunnel_token: Option<String>,
-        tunnel_id: Option<String>,
-    },
-    Shutdown {},
-}
-
-fn default_ref() -> String {
-    "main".to_string()
-}
+pub use protocol::{AgentOut, DeployStatus, LogStream, WorkerToAgent};
 
 #[derive(Debug, Clone)]
 struct LogLine {
-    stream: String,
+    stream: LogStream,
     data: String,
 }
 
@@ -178,12 +121,19 @@ async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> Result<()> {
         .await
         .context("sending register")?;
 
-    let mut heartbeat = interval(Duration::from_secs(30));
-    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Heartbeat is started AFTER the registered frame is received
+    // (handled inside the message loop). Don't fire one immediately —
+    // tokio's interval first tick is immediate and would race the register.
+    let mut heartbeat: Option<tokio::time::Interval> = None;
 
     loop {
         tokio::select! {
-            _ = heartbeat.tick() => {
+            _ = async {
+                match heartbeat.as_mut() {
+                    Some(hb) => hb.tick().await,
+                    None => std::future::pending().await,
+                }
+            } => {
                 let hb = AgentOut::Heartbeat { timestamp: now_ts() };
                 if let Err(e) = ws.send(Message::Text(serde_json::to_string(&hb)?)).await {
                     warn!(error = %e, "heartbeat send failed");
@@ -194,7 +144,15 @@ async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> Result<()> {
             msg = ws.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        handle_incoming(&text, cfg, identity, &mut ws).await?;
+                        let is_registered = handle_incoming(&text, cfg, identity, &mut ws).await?;
+                        if is_registered && heartbeat.is_none() {
+                            info!("starting heartbeat (30s interval)");
+                            let mut hb = interval(Duration::from_secs(30));
+                            hb.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                            // Skip the immediate first tick — already registered
+                            hb.tick().await;
+                            heartbeat = Some(hb);
+                        }
                     }
                     Some(Ok(Message::Ping(p))) => {
                         ws.send(Message::Pong(p)).await.ok();
@@ -223,107 +181,119 @@ async fn handle_incoming(
     cfg: &Config,
     _identity: &Arc<Identity>,
     ws: &mut WsStream,
-) -> Result<()> {
-    let parsed: serde_json::Value = match serde_json::from_str(text) {
-        Ok(v) => v,
+) -> Result<bool> {
+    // Parse the frame with serde — `deny_unknown_fields` on the Rust side
+    // matches the Zod `.strict()` on the TS side. Either side rejects drift.
+    let frame: WorkerToAgent = match serde_json::from_str(text) {
+        Ok(f) => f,
         Err(e) => {
-            warn!(error = %e, raw = %text, "invalid JSON from server");
-            return Ok(());
+            warn!(error = %e, raw = %text, "invalid frame from server (protocol drift?)");
+            let err = serde_json::to_string(&AgentOut::DeployDone {
+                deployment_id: "".into(),
+                status: protocol::DeployStatus::Failed,
+                url: None,
+                local_url: None,
+                error: Some(format!("invalid frame: {}", e)),
+            })
+            .unwrap_or_else(|_| r#"{"type":"error","code":"bad_frame"}"#.to_string());
+            let _ = ws.send(Message::Text(err)).await;
+            return Ok(false);
         }
     };
 
-    let msg_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    info!(msg_type = %msg_type, "← server");
-
-    match msg_type {
-        "registered" => {
+    match frame {
+        WorkerToAgent::Registered { session_token } => {
             info!("✓ registered with control plane");
-            // If server returned a new session_token, persist it
-            if let Some(token) = parsed.get("session_token").and_then(|v| v.as_str()) {
+            if let Some(token) = session_token {
                 let token_path = cfg.state_dir().join("session_token");
                 let _ = std::fs::create_dir_all(cfg.state_dir());
                 let _ = std::fs::write(token_path, token);
                 info!("session_token saved to disk");
             }
+            return Ok(true);
         }
-        "ping" => {
+        WorkerToAgent::Ping {} => {
             let ready = AgentOut::Ready { timestamp: now_ts() };
             ws.send(Message::Text(serde_json::to_string(&ready)?)).await.ok();
         }
-        "deploy" => {
+        WorkerToAgent::Deploy {
+            deployment_id,
+            repo_url,
+            ref_,
+            env: _env,
+            build_command,
+            serve_command,
+            port,
+            hostname,
+            public_url,
+            tunnel_token,
+            tunnel_id,
+            sig,
+        } => {
             // CRITICAL: Verify HMAC signature if AGENT_SHARED_SECRET is set
             if let Some(secret) = &cfg.agent_shared_secret {
-                let sig = parsed.get("sig").and_then(|v| v.as_str());
-                if let Some(sig) = sig {
-                    // Reconstruct the payload as the canonical JSON (without sig)
-                    let mut payload = parsed.clone();
-                    payload.as_object_mut().map(|m| m.remove("sig"));
-                    let payload_str = serde_json::to_string(&payload).unwrap_or_default();
-                    let valid = verify_hmac_sha256(secret, &payload_str, sig);
-                    if !valid {
-                        warn!("HMAC signature verification FAILED for deploy — rejecting");
-                        let _ = ws
-                            .send(Message::Text(
-                                r#"{"type":"error","code":"invalid_signature"}"#.to_string(),
-                            ))
-                            .await;
-                        return Ok(());
-                    }
-                    info!("✓ deploy signature verified");
-                } else {
+                let Some(sig_str) = &sig else {
                     warn!("deploy message has no signature but AGENT_SHARED_SECRET is set — rejecting");
                     let _ = ws
                         .send(Message::Text(
                             r#"{"type":"error","code":"missing_signature"}"#.to_string(),
                         ))
                         .await;
-                    return Ok(());
+                    return Ok(false);
+                };
+                // Reconstruct the payload as the canonical JSON (without sig).
+                // Use a typed struct so the field order matches the Worker's signing.
+                #[derive(Serialize)]
+                #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+                struct DeployNoSig<'a> {
+                    #[serde(rename = "type")]
+                    ty: &'a str,
+                    deployment_id: &'a str,
+                    repo_url: &'a str,
+                    #[serde(rename = "ref")]
+                    ref_: &'a str,
+                    env: &'a std::collections::BTreeMap<String, String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    build_command: &'a Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    serve_command: &'a Option<String>,
+                    port: u16,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    hostname: &'a Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    public_url: &'a Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    tunnel_token: &'a Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    tunnel_id: &'a Option<String>,
                 }
+                let payload = DeployNoSig {
+                    ty: "deploy",
+                    deployment_id: &deployment_id,
+                    repo_url: &repo_url,
+                    ref_: &ref_,
+                    env: &_env,
+                    build_command: &build_command,
+                    serve_command: &serve_command,
+                    port,
+                    hostname: &hostname,
+                    public_url: &public_url,
+                    tunnel_token: &tunnel_token,
+                    tunnel_id: &tunnel_id,
+                };
+                let payload_str = serde_json::to_string(&payload).unwrap_or_default();
+                let valid = verify_hmac_sha256(secret, &payload_str, sig_str);
+                if !valid {
+                    warn!("HMAC signature verification FAILED for deploy — rejecting");
+                    let _ = ws
+                        .send(Message::Text(
+                            r#"{"type":"error","code":"invalid_signature"}"#.to_string(),
+                        ))
+                        .await;
+                    return Ok(false);
+                }
+                info!("✓ deploy signature verified");
             }
-
-            let deployment_id = parsed
-                .get("deployment_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let repo_url = parsed
-                .get("repo_url")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let ref_ = parsed
-                .get("ref")
-                .and_then(|v| v.as_str())
-                .unwrap_or("main")
-                .to_string();
-            let build_command = parsed
-                .get("build_command")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let serve_command = parsed
-                .get("serve_command")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let port = parsed
-                .get("port")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as u16);
-            let hostname = parsed
-                .get("hostname")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let public_url = parsed
-                .get("public_url")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let tunnel_token = parsed
-                .get("tunnel_token")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let tunnel_id = parsed
-                .get("tunnel_id")
-                .and_then(|v| v.as_str())
-                .map(String::from);
 
             info!(deployment_id = %deployment_id, repo = %repo_url, ref_ = %ref_, "deploy requested");
             run_deploy(
@@ -332,7 +302,7 @@ async fn handle_incoming(
                 ref_,
                 build_command,
                 serve_command,
-                port,
+                Some(port),
                 hostname,
                 public_url,
                 tunnel_token,
@@ -342,16 +312,16 @@ async fn handle_incoming(
             )
             .await;
         }
-        "shutdown" => {
+        WorkerToAgent::Shutdown {} => {
             info!("shutdown requested, exiting");
             std::process::exit(0);
         }
-        _ => {
-            debug!(raw = %text, "unhandled server message");
+        WorkerToAgent::Error { code, message } => {
+            warn!(code = %code, message = ?message, "← server error frame");
         }
     }
 
-    Ok(())
+    Ok(false)
 }
 
 #[derive(Debug)]
@@ -399,7 +369,7 @@ async fn run_deploy(
         build_dir: std::env::temp_dir().join(format!("void-build-{}", &deployment_id)),
     };
 
-    emit_log(&mut line_no, &deployment_id, ws, "stdout", format!(
+    emit_log(&mut line_no, &deployment_id, ws, LogStream::Stdout, format!(
         "→ deploy {} ref={} from {}\n",
         params.deployment_id, params.ref_, params.repo_url
     ))
@@ -409,15 +379,15 @@ async fn run_deploy(
         let _ = std::fs::remove_dir_all(&params.build_dir);
     }
     if let Err(e) = std::fs::create_dir_all(&params.build_dir) {
-        emit_log(&mut line_no, &deployment_id, ws, "stderr", format!("mkdir failed: {}\n", e)).await;
-        emit_done(&deployment_id, ws, "failed", None, None, Some(e.to_string())).await;
+        emit_log(&mut line_no, &deployment_id, ws, LogStream::Stderr, format!("mkdir failed: {}\n", e)).await;
+        emit_done(&deployment_id, ws, DeployStatus::Failed, None, None, Some(e.to_string())).await;
         return;
     }
     emit_log(
         &mut line_no,
         &deployment_id,
         ws,
-        "stdout",
+        LogStream::Stdout,
         format!("→ build dir: {}\n", params.build_dir.display()),
     )
     .await;
@@ -427,7 +397,7 @@ async fn run_deploy(
         &mut line_no,
         &deployment_id,
         ws,
-        "stdout",
+        LogStream::Stdout,
         format!("→ git clone {} (depth 1)\n", params.repo_url),
     )
     .await;
@@ -445,14 +415,14 @@ async fn run_deploy(
             &mut line_no,
             &deployment_id,
             ws,
-            "stderr",
+            LogStream::Stderr,
             format!("git clone failed with exit code {}\n", exit),
         )
         .await;
         emit_done(
             &deployment_id,
             ws,
-            "failed",
+            DeployStatus::Failed,
             None,
             None,
             Some(format!("git clone failed (exit {})", exit)),
@@ -460,7 +430,7 @@ async fn run_deploy(
         .await;
         return;
     }
-    emit_log(&mut line_no, &deployment_id, ws, "stdout", "→ ✓ clone complete\n".to_string()).await;
+    emit_log(&mut line_no, &deployment_id, ws, LogStream::Stdout, "→ ✓ clone complete\n".to_string()).await;
 
     // Auto-detect project type if build_command / serve_command not provided
     let port_in = params.port.unwrap_or(0);
@@ -470,7 +440,7 @@ async fn run_deploy(
             &mut line_no,
             &deployment_id,
             ws,
-            "stdout",
+            LogStream::Stdout,
             format!("→ 🔍 auto-detected framework: {}\n", detected.framework),
         )
         .await;
@@ -489,7 +459,7 @@ async fn run_deploy(
             &mut line_no,
             &deployment_id,
             ws,
-            "stdout",
+            LogStream::Stdout,
             format!("→ build: $ {}\n", cmd),
         )
         .await;
@@ -499,14 +469,14 @@ async fn run_deploy(
                 &mut line_no,
                 &deployment_id,
                 ws,
-                "stderr",
+                LogStream::Stderr,
                 format!("build failed with exit code {}\n", exit),
             )
             .await;
             emit_done(
                 &deployment_id,
                 ws,
-                "failed",
+                DeployStatus::Failed,
                 None,
                 None,
                 Some(format!("build failed (exit {})", exit)),
@@ -514,13 +484,13 @@ async fn run_deploy(
             .await;
             return;
         }
-        emit_log(&mut line_no, &deployment_id, ws, "stdout", "→ ✓ build complete\n".to_string()).await;
+        emit_log(&mut line_no, &deployment_id, ws, LogStream::Stdout, "→ ✓ build complete\n".to_string()).await;
     } else {
         emit_log(
             &mut line_no,
             &deployment_id,
             ws,
-            "stdout",
+            LogStream::Stdout,
             "→ no build_command, skipping\n".to_string(),
         )
         .await;
@@ -534,7 +504,7 @@ async fn run_deploy(
             &mut line_no,
             &deployment_id,
             ws,
-            "stdout",
+            LogStream::Stdout,
             format!("→ serve: $ {} (port {})\n", cmd, port),
         )
         .await;
@@ -554,11 +524,11 @@ async fn run_deploy(
                     &mut line_no,
                     &deployment_id,
                     ws,
-                    "stderr",
+                    LogStream::Stderr,
                     format!("serve spawn failed: {}\n", e),
                 )
                 .await;
-                emit_done(&deployment_id, ws, "failed", None, None, Some(e.to_string())).await;
+                emit_done(&deployment_id, ws, DeployStatus::Failed, None, None, Some(e.to_string())).await;
                 return;
             }
         };
@@ -574,7 +544,7 @@ async fn run_deploy(
                 while let Ok(Some(line)) = reader.next_line().await {
                     if txc
                         .send(LogLine {
-                            stream: "stdout".into(),
+                            stream: LogStream::Stdout,
                             data: format!("{}\n", line),
                         })
                         .await
@@ -592,7 +562,7 @@ async fn run_deploy(
                 while let Ok(Some(line)) = reader.next_line().await {
                     if txc
                         .send(LogLine {
-                            stream: "stderr".into(),
+                            stream: LogStream::Stderr,
                             data: format!("{}\n", line),
                         })
                         .await
@@ -631,7 +601,7 @@ async fn run_deploy(
                 &mut line_no,
                 &deployment_id,
                 ws,
-                "stderr",
+                LogStream::Stderr,
                 format!(
                     "✗ health check FAILED: serve not responding on {} after 10s (last err: {})\n",
                     local_url,
@@ -643,7 +613,7 @@ async fn run_deploy(
                 &mut line_no,
                 &deployment_id,
                 ws,
-                "stderr",
+                LogStream::Stderr,
                 "→ killing serve process and rolling back deploy\n".to_string(),
             )
             .await;
@@ -652,7 +622,7 @@ async fn run_deploy(
             emit_done(
                 &deployment_id,
                 ws,
-                "failed",
+                DeployStatus::Failed,
                 None,
                 Some(local_url.clone()),
                 Some("health check failed: serve did not respond 2xx within 10s".to_string()),
@@ -666,7 +636,7 @@ async fn run_deploy(
             &mut line_no,
             &deployment_id,
             ws,
-            "stdout",
+            LogStream::Stdout,
             format!("→ ✓ serve alive on {}\n", local_url),
         )
         .await;
@@ -689,7 +659,7 @@ async fn run_deploy(
                     &mut line_no,
                     &deployment_id,
                     ws,
-                    "stdout",
+                    LogStream::Stdout,
                     format!("→ ensuring cloudflared is running for tunnel...\n"),
                 )
                 .await;
@@ -705,7 +675,7 @@ async fn run_deploy(
                             &mut line_no,
                             &deployment_id,
                             ws,
-                            "stdout",
+                            LogStream::Stdout,
                             format!("→ ✓ cloudflared running, public URL active: {}\n", public_url),
                         )
                         .await;
@@ -715,7 +685,7 @@ async fn run_deploy(
                             &mut line_no,
                             &deployment_id,
                             ws,
-                            "stderr",
+                            LogStream::Stderr,
                             format!(
                                 "→ cloudflared setup warning: {}. Install with `brew install cloudflared` (macOS) or `apt install cloudflared` (Linux). Public URL won't work until then.\n",
                                 e
@@ -730,7 +700,7 @@ async fn run_deploy(
         emit_done(
             &deployment_id,
             ws,
-            "success",
+            DeployStatus::Success,
             Some(public_url.clone()),
             Some(local_url.clone()),
             None,
@@ -750,7 +720,7 @@ async fn run_deploy(
         emit_done(
             &deployment_id,
             ws,
-            "success",
+            DeployStatus::Success,
             Some(public_url.clone()),
             None,
             None,
@@ -801,13 +771,13 @@ async fn emit_log(
     line_no: &mut u32,
     deployment_id: &str,
     ws: &mut WsStream,
-    stream: &str,
+    stream: LogStream,
     data: String,
 ) {
     *line_no += 1;
     let msg = AgentOut::Log {
         deployment_id: deployment_id.to_string(),
-        stream: stream.to_string(),
+        stream,
         data,
         line: *line_no,
     };
@@ -820,14 +790,14 @@ async fn emit_log(
 async fn emit_done(
     deployment_id: &str,
     ws: &mut WsStream,
-    status: &str,
+    status: DeployStatus,
     url: Option<String>,
     local_url: Option<String>,
     error: Option<String>,
 ) {
     let msg = AgentOut::DeployDone {
         deployment_id: deployment_id.to_string(),
-        status: status.to_string(),
+        status,
         url,
         local_url,
         error,
@@ -853,7 +823,7 @@ async fn run_cmd_streaming(
     {
         Ok(c) => c,
         Err(e) => {
-            emit_log(line_no, deployment_id, ws, "stderr", format!("spawn {} failed: {}\n", cmd, e)).await;
+            emit_log(line_no, deployment_id, ws, LogStream::Stderr, format!("spawn {} failed: {}\n", cmd, e)).await;
             return -1;
         }
     };
@@ -883,7 +853,7 @@ async fn run_shell_streaming(
     {
         Ok(c) => c,
         Err(e) => {
-            emit_log(line_no, deployment_id, ws, "stderr", format!("sh -c failed: {}\n", e)).await;
+            emit_log(line_no, deployment_id, ws, LogStream::Stderr, format!("sh -c failed: {}\n", e)).await;
             return -1;
         }
     };
@@ -917,7 +887,7 @@ async fn stream_child_to_ws(
             while let Ok(Some(line)) = reader.next_line().await {
                 if txc
                     .send(LogLine {
-                        stream: "stdout".into(),
+                        stream: LogStream::Stdout,
                         data: format!("{}\n", line),
                     })
                     .await
@@ -935,7 +905,7 @@ async fn stream_child_to_ws(
             while let Ok(Some(line)) = reader.next_line().await {
                 if txc
                     .send(LogLine {
-                        stream: "stderr".into(),
+                        stream: LogStream::Stderr,
                         data: format!("{}\n", line),
                     })
                     .await

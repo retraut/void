@@ -10,46 +10,14 @@
  *   verified by agent before executing commands)
  * - setup_token is one-time: validated against D1 on first register, then replaced with persistent session_token
  * - session_token is persistent for reconnects (rotated manually or on logout)
+ *
+ * Protocol: all WS frames are validated via Zod schemas in `./protocol`.
+ * See docs/PROTOCOL.md for the wire format.
  */
 
 import { Env } from "./env";
 import { timingSafeEqual } from "./auth";
-
-interface AgentMessage {
-	type: "register" | "heartbeat" | "log" | "deploy_done" | "exec_result" | "ready";
-	deployment_id?: string;
-	server_id?: string;
-	public_key?: string;
-	setup_token?: string;
-	session_token?: string;
-	stream?: "stdout" | "stderr";
-	data?: string;
-	line?: number;
-	status?: string;
-	url?: string;
-	error?: string;
-	exit_code?: number;
-	timestamp?: number;
-	command_id?: string;
-	stdout?: string;
-	stderr?: string;
-}
-
-interface WorkerToAgent {
-	type: "deploy" | "ping" | "shutdown" | "ack" | "registered";
-	deployment_id?: string;
-	repo_url?: string;
-	ref?: string;
-	env?: Record<string, string>;
-	build_command?: string;
-	serve_command?: string;
-	port?: number;
-	// Tunnel/cloudflared info (so the agent can run cloudflared locally)
-	hostname?: string;
-	public_url?: string;
-	tunnel_token?: string;
-	tunnel_id?: string;
-}
+import { parseAgentFrame, type AgentOutFrame, type WorkerToAgentFrame } from "./protocol";
 
 export class VoidCell {
 	private state: DurableObjectState;
@@ -85,7 +53,19 @@ export class VoidCell {
 
 		// Internal: send deploy command to agent
 		if (url.pathname.endsWith("/send-deploy") && request.method === "POST") {
-			const body = (await request.json()) as WorkerToAgent & { deployment_id: string; repo_url: string; ref: string };
+			const body = (await request.json()) as {
+				deployment_id: string;
+				repo_url: string;
+				ref: string;
+				env?: Record<string, string>;
+				build_command?: string;
+				serve_command?: string;
+				port: number;
+				hostname?: string;
+				public_url?: string;
+				tunnel_token?: string;
+				tunnel_id?: string;
+			};
 			if (!this.ws || !this.registered) {
 				return Response.json({ error: "Agent not connected" }, { status: 503 });
 			}
@@ -105,12 +85,12 @@ export class VoidCell {
 			}
 
 			// Build the deploy message and HMAC-sign it
-			const deployMsg: WorkerToAgent = {
+			const deployMsg: WorkerToAgentFrame = {
 				type: "deploy",
 				deployment_id: body.deployment_id,
 				repo_url: urlCheck.normalized,
 				ref: body.ref,
-				env: body.env,
+				env: body.env || {},
 				build_command: body.build_command,
 				serve_command: body.serve_command,
 				port: body.port,
@@ -121,11 +101,13 @@ export class VoidCell {
 			};
 			if (this.env.AGENT_SHARED_SECRET) {
 				const { signWithAgentSecret } = await import("./security");
-				const payload = JSON.stringify(deployMsg);
-				(deployMsg as any).sig = await signWithAgentSecret(this.env.AGENT_SHARED_SECRET, payload);
+				// Sign the canonical JSON without the `sig` field itself
+				const { sig: _ignored, ...payload } = deployMsg;
+				const payloadStr = JSON.stringify(payload);
+				(deployMsg as { sig?: string }).sig = await signWithAgentSecret(this.env.AGENT_SHARED_SECRET, payloadStr);
 			}
 			this.ws.send(JSON.stringify(deployMsg));
-			return Response.json({ ok: true, sent: deployMsg, signed: !!(deployMsg as any).sig });
+			return Response.json({ ok: true, sent: deployMsg, signed: !!(deployMsg as { sig?: string }).sig });
 		}
 
 		// Internal: subscribe to log stream (SSE)
@@ -147,12 +129,14 @@ export class VoidCell {
 
 		// Internal: rotate session_token (invalidates the old one)
 		if (url.pathname.endsWith("/rotate-session") && request.method === "POST") {
-			const newToken = `sess_${crypto.randomUUID().replace(/-/g, "")}`;
-			const now = Math.floor(Date.now() / 1000);
-			const serverIdFromUrl = url.pathname.match(/^\/cell\/([^/]+)\/rotate-session$/)?.[1] || this.serverId;
+			// Path is /:server_id/rotate-session (DO strips the host)
+			const m = url.pathname.match(/^\/([^/]+)\/rotate-session$/);
+			const serverIdFromUrl = m?.[1] || this.serverId;
 			if (!serverIdFromUrl) {
 				return Response.json({ error: "no server_id" }, { status: 400 });
 			}
+			const newToken = `sess_${crypto.randomUUID().replace(/-/g, "")}`;
+			const now = Math.floor(Date.now() / 1000);
 			await this.env.void_db
 				.prepare(
 					"UPDATE servers SET session_token = ?, session_token_created_at = ? WHERE id = ?",
@@ -190,23 +174,22 @@ export class VoidCell {
 	}
 
 	private async handleAgentMessage(raw: string): Promise<void> {
-		let msg: AgentMessage;
-		try {
-			msg = JSON.parse(raw);
-		} catch {
+		const parsed = parseAgentFrame(raw);
+		if ("error" in parsed) {
+			// Malformed frame: tell the agent, then close.
+			this.ws?.send(
+				JSON.stringify({ type: "error", code: "invalid_frame", message: parsed.error }),
+			);
+			try { this.ws?.close(1008, "invalid frame: " + parsed.error); } catch {}
+			this.ws = null;
 			return;
 		}
+		const msg: AgentOutFrame = parsed;
 
 		if (msg.type === "register") {
 			const serverId = msg.server_id;
 			const setupToken = msg.setup_token;
 			const sessionToken = msg.session_token;
-			if (!serverId) {
-				this.ws?.send(JSON.stringify({ type: "error", code: "missing_server_id" }));
-				try { this.ws?.close(1008, "missing server_id"); } catch {}
-				this.ws = null;
-				return;
-			}
 
 			const row = await this.env.void_db
 				.prepare(
@@ -257,11 +240,11 @@ export class VoidCell {
 						                  session_token = ?, session_token_created_at = ?,
 						                  agent_public_key = ? WHERE id = ?`,
 					)
-					.bind(now, newSessionToken, now, msg.public_key || null, serverId)
+					.bind(now, newSessionToken, now, msg.public_key, serverId)
 					.run();
 				this.registered = true;
 				this.serverId = serverId;
-				this.agentPublicKey = msg.public_key || null;
+				this.agentPublicKey = msg.public_key;
 				this.lastHeartbeat = Date.now();
 				this.ws?.send(
 					JSON.stringify({
@@ -275,14 +258,24 @@ export class VoidCell {
 					.prepare(
 						"UPDATE servers SET agent_public_key = COALESCE(?, agent_public_key), last_seen_at = ? WHERE id = ?",
 					)
-					.bind(msg.public_key || null, now, serverId)
+					.bind(msg.public_key, now, serverId)
 					.run();
 				this.registered = true;
 				this.serverId = serverId;
-				this.agentPublicKey = msg.public_key || null;
+				this.agentPublicKey = msg.public_key;
 				this.lastHeartbeat = Date.now();
 				this.ws?.send(JSON.stringify({ type: "registered" }));
 			}
+			return;
+		}
+
+		if (!this.registered) {
+			// Anything other than `register` before registration is rejected
+			this.ws?.send(
+				JSON.stringify({ type: "error", code: "not_registered", message: `got ${msg.type} before register` }),
+			);
+			try { this.ws?.close(1008, "not registered"); } catch {}
+			this.ws = null;
 			return;
 		}
 
@@ -293,9 +286,9 @@ export class VoidCell {
 
 		if (msg.type === "log") {
 			const entry = {
-				deployment_id: msg.deployment_id || "",
-				stream: (msg.stream || "stdout") as string,
-				data: msg.data || "",
+				deployment_id: msg.deployment_id,
+				stream: msg.stream,
+				data: msg.data,
 				ts: Date.now(),
 			};
 			this.logBuffer.push(entry);
@@ -315,7 +308,7 @@ export class VoidCell {
 
 		if (msg.type === "deploy_done") {
 			const entry = {
-				deployment_id: msg.deployment_id || "",
+				deployment_id: msg.deployment_id,
 				stream: "status",
 				data: JSON.stringify({ status: msg.status, url: msg.url, error: msg.error }),
 				ts: Date.now(),
@@ -329,6 +322,11 @@ export class VoidCell {
 					this.sseClients.delete(writer);
 				}
 			}
+			return;
+		}
+
+		if (msg.type === "ready") {
+			// Reply to a Worker `ping` — nothing to do server-side, just acknowledge.
 			return;
 		}
 	}
