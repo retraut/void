@@ -460,6 +460,18 @@ export function renderLandingHtml(opts: {
   h1{font-size:4rem;font-weight:800;letter-spacing:-0.04em;line-height:1;margin-bottom:24px}
   h1 span{background:linear-gradient(120deg,#fff 0%,#666 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
   .sub{font-size:1.25rem;color:#999;margin-bottom:32px;line-height:1.5}
+  .taglines{position:relative;height:3.4em;margin-bottom:12px;font-size:1.25rem;color:#999;line-height:1.5;overflow:hidden}
+  .tagline{position:absolute;top:0;left:0;right:0;opacity:0;transform:translateY(10px);animation:tagline-cycle 20s linear infinite}
+  .tagline.t1{animation-delay:0s}.tagline.t2{animation-delay:5s}.tagline.t3{animation-delay:10s}.tagline.t4{animation-delay:15s}
+  @keyframes tagline-cycle{0%{opacity:0;transform:translateY(10px)}3%{opacity:1;transform:translateY(0)}22%{opacity:1;transform:translateY(0)}27%{opacity:0;transform:translateY(-10px)}100%{opacity:0;transform:translateY(-10px)}}
+  .tagline-dots{display:flex;gap:6px;margin-bottom:32px}
+  .tagline-dots .dot{width:5px;height:5px;border-radius:50%;background:#333;transition:background 0.3s}
+  .tagline-dots .dot.active{background:#fff}
+  .tagline-dots .dot:nth-child(1){animation:dot-cycle 20s linear infinite;animation-delay:0s}
+  .tagline-dots .dot:nth-child(2){animation:dot-cycle 20s linear infinite;animation-delay:5s}
+  .tagline-dots .dot:nth-child(3){animation:dot-cycle 20s linear infinite;animation-delay:10s}
+  .tagline-dots .dot:nth-child(4){animation:dot-cycle 20s linear infinite;animation-delay:15s}
+  @keyframes dot-cycle{0%{background:#333}3%{background:#fff}27%{background:#fff}30%{background:#333}100%{background:#333}}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:32px}
   .card{background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:20px;transition:border-color 0.2s}
   .card:hover{border-color:#444}
@@ -498,7 +510,18 @@ export function renderLandingHtml(opts: {
 <div class="wrap">
   ${topRight}
   <h1>deployed <span>into the void</span></h1>
-  <p class="sub">Self-hosted, edge-driven PaaS. Best-in-class DX, Hetzner pricing, no SSH. AI-friendly deploys via MCP.</p>
+  <div class="taglines" aria-live="polite">
+    <span class="tagline t1">Self-hosted, edge-driven PaaS. Best-in-class DX, Hetzner pricing, no SSH. AI-deploys via MCP.</span>
+    <span class="tagline t2">your AI writes the code. void ships it.</span>
+    <span class="tagline t3">Hetzner bill. Premium DX. Zero SSH. Live in 60 seconds.</span>
+    <span class="tagline t4">the only PaaS that runs on your own VMs. you own it all.</span>
+  </div>
+  <div class="tagline-dots" aria-hidden="true">
+    <span class="dot active"></span>
+    <span class="dot"></span>
+    <span class="dot"></span>
+    <span class="dot"></span>
+  </div>
 
   <div class="actions">
     ${opts.user ? `
