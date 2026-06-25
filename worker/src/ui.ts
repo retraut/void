@@ -27,10 +27,53 @@ function userMenu(user: { username: string; avatar_url: string | null }): string
 	</details>`;
 }
 
-function html(content: string, title: string, opts: { user?: { username: string; avatar_url: string | null } | null } = {}): Response {
-	const userBlock = opts.user
-		? userMenu(opts.user)
-		: `<a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">Sign in</a>`;
+/**
+ * Sidebar nav item with inline SVG icon. Lucide-style stroke icons.
+ * Icons use currentColor so they inherit text color (active = white, idle = #666).
+ */
+const ICONS = {
+	dashboard: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12 12 3l9 9"/><path d="M5 10v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V10"/><path d="M9 21v-6h6v6"/></svg>`,
+	servers: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="6" rx="1.5"/><rect x="2" y="15" width="20" height="6" rx="1.5"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>`,
+	projects: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`,
+	deployments: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>`,
+	settings: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+};
+
+/**
+ * Sidebar layout — Vercel-style fixed left nav, scrollable right content.
+ * Active item is highlighted via the `current` prop (path prefix match).
+ */
+function sidebar(current: string, user: { username: string; avatar_url: string | null } | null): string {
+	const isActive = (prefix: string) => current === prefix || current.startsWith(prefix + "/") ? "active" : "";
+	const items = [
+		{ href: "/dashboard", label: "Dashboard", icon: ICONS.dashboard, match: "/dashboard" },
+		{ href: "/servers", label: "Servers", icon: ICONS.servers, match: "/servers" },
+		{ href: "/projects", label: "Projects", icon: ICONS.projects, match: "/projects" },
+		{ href: "/deployments", label: "Deployments", icon: ICONS.deployments, match: "/deployments" },
+		{ href: "/settings", label: "Settings", icon: ICONS.settings, match: "/settings" },
+	];
+	const navItems = items
+		.map(
+			(it) => `<a class="nav-item ${isActive(it.match)}" href="${it.href}">
+				<span class="nav-icon">${it.icon}</span>
+				<span>${it.label}</span>
+			</a>`,
+		)
+		.join("");
+	const userBlock = user
+		? `<div class="sidebar-user">${userMenu(user)}</div>`
+		: `<a class="sidebar-signin" href="/api/auth/github?returnTo=%2Fdashboard">Sign in</a>`;
+
+	return `<aside class="sidebar">
+		<a class="sidebar-logo" href="/dashboard">void</a>
+		<nav class="sidebar-nav">${navItems}</nav>
+		<div class="sidebar-footer">${userBlock}</div>
+	</aside>`;
+}
+
+function html(content: string, title: string, opts: { user?: { username: string; avatar_url: string | null } | null; current?: string } = {}): Response {
+	const current = opts.current || "";
+	const sidebarBlock = sidebar(current, opts.user || null);
 
 	const page = `<!doctype html>
 <html lang="en">
@@ -40,32 +83,29 @@ function html(content: string, title: string, opts: { user?: { username: string;
 <title>${escape(title)} · void</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;background:#000;color:#fff;min-height:100vh;padding:24px;line-height:1.5}
-  .topbar{display:flex;align-items:center;justify-content:space-between;max-width:1200px;margin:0 auto 32px;padding:14px 20px;background:#0a0a0a;border:1px solid #222;border-radius:12px}
-  .logo{font-weight:800;letter-spacing:-0.04em;font-size:1.1rem;display:flex;align-items:center;gap:8px}
-  .logo span{color:#666;font-weight:500}
-  .nav{display:flex;gap:4px;margin-left:32px}
-  .nav a{color:#888;text-decoration:none;padding:6px 12px;border-radius:6px;font-size:0.9rem;font-weight:500}
-  .nav a:hover{color:#fff;background:#1a1a1a}
-  .nav a.active{color:#fff;background:#1a1a1a}
-  .user-menu{position:relative}
-  .user-menu summary{list-style:none;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;cursor:pointer;color:#999;font-size:0.9rem;transition:background 0.15s;user-select:none}
-  .user-menu summary::-webkit-details-marker{display:none}
-  .user-menu summary:hover{background:#1a1a1a;color:#fff}
-  .user-menu[open] summary{background:#1a1a1a;color:#fff}
-  .user-menu img{border-radius:50%;display:block}
-  .user-menu-pop{position:absolute;top:calc(100% + 8px);right:0;background:#0a0a0a;border:1px solid #222;border-radius:10px;padding:6px;min-width:180px;box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:10;display:flex;flex-direction:column;gap:2px}
-  .user-menu-pop a{display:block;padding:8px 12px;border-radius:6px;color:#ccc;font-size:0.9rem;text-decoration:none;transition:background 0.1s}
-  .user-menu-pop a:hover{background:#1a1a1a;color:#fff}
-  .user-menu-pop hr{border:0;border-top:1px solid #222;margin:4px 6px}
-  .link-mute{color:#666;text-decoration:none;font-size:0.85rem;margin-left:8px}
-  .link-mute:hover{color:#fff}
-  .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:6px;font-size:0.9rem;font-weight:600;text-decoration:none;border:1px solid transparent;cursor:pointer}
-  .btn-primary{background:#fff;color:#000}
-  .btn-secondary{background:#1a1a1a;color:#fff;border-color:#333}
-  .container{max-width:1200px;margin:0 auto}
-  h1{font-size:1.75rem;font-weight:700;margin-bottom:16px;letter-spacing:-0.02em}
-  h2{font-size:1.1rem;font-weight:600;margin:24px 0 12px;color:#aaa;text-transform:uppercase;letter-spacing:0.05em}
+  body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;background:#000;color:#fff;min-height:100vh;line-height:1.5;display:flex}
+
+  /* Sidebar */
+  .sidebar{position:fixed;left:0;top:0;bottom:0;width:220px;background:#0a0a0a;border-right:1px solid #1a1a1a;padding:20px 12px;display:flex;flex-direction:column;gap:24px;z-index:10}
+  .sidebar-logo{font-size:1.1rem;font-weight:800;letter-spacing:-0.04em;color:#fff;text-decoration:none;padding:6px 12px}
+  .sidebar-nav{display:flex;flex-direction:column;gap:2px;flex:1}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#888;text-decoration:none;font-size:0.9rem;font-weight:500;transition:background 0.1s,color 0.1s}
+  .nav-item:hover{background:#141414;color:#fff}
+  .nav-item.active{background:#1a1a1a;color:#fff}
+  .nav-icon{display:inline-flex;width:16px;height:16px;flex-shrink:0}
+  .nav-icon svg{width:16px;height:16px;display:block}
+  .sidebar-footer{margin-top:auto;padding-top:12px;border-top:1px solid #1a1a1a}
+  .sidebar-user{width:100%}
+  .sidebar-user .user-menu summary{width:100%;justify-content:flex-start}
+  .sidebar-signin{display:block;text-align:center;padding:8px 12px;border-radius:6px;background:#fff;color:#000;font-size:0.85rem;font-weight:600;text-decoration:none}
+
+  /* Main */
+  main{flex:1;margin-left:220px;padding:40px 48px;min-height:100vh;max-width:1400px}
+  h1{font-size:1.75rem;font-weight:700;margin-bottom:24px;letter-spacing:-0.02em;display:flex;align-items:center;gap:12px}
+  h1 .sub-meta{color:#666;font-weight:500;font-size:0.95rem;margin-left:8px}
+  h2{font-size:1rem;font-weight:600;margin:32px 0 12px;color:#aaa;text-transform:uppercase;letter-spacing:0.05em}
+
+  /* Cards / tables (legacy) */
   .card{background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:20px;margin-bottom:16px}
   .empty{padding:60px 20px;text-align:center;color:#666}
   .empty h2{color:#fff;text-transform:none;font-size:1.25rem;margin-bottom:8px}
@@ -93,26 +133,56 @@ function html(content: string, title: string, opts: { user?: { username: string;
   .pager{display:flex;gap:12px;align-items:center;justify-content:flex-end;padding:12px 4px;font-size:0.9rem}
   .pager a{color:#6cf;padding:4px 10px;border:1px solid #333;border-radius:6px;text-decoration:none}
   .pager a:hover{background:#1a1a1a}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:6px;font-size:0.9rem;font-weight:600;text-decoration:none;border:1px solid transparent;cursor:pointer}
+  .btn-primary{background:#fff;color:#000}
+  .btn-secondary{background:#1a1a1a;color:#fff;border-color:#333}
   .btn-danger{background:#1a0a0a;color:#f44;border-color:#533}
   .btn-danger:hover{background:#2a0a0a;border-color:#f44}
+
+  /* User menu (in sidebar) */
+  .user-menu{position:relative;width:100%}
+  .user-menu summary{list-style:none;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;color:#999;font-size:0.85rem;transition:background 0.15s;user-select:none}
+  .user-menu summary::-webkit-details-marker{display:none}
+  .user-menu summary:hover{background:#141414;color:#fff}
+  .user-menu[open] summary{background:#1a1a1a;color:#fff}
+  .user-menu img{border-radius:50%;display:block;width:22px;height:22px}
+  .user-menu-pop{position:absolute;bottom:calc(100% + 8px);left:0;right:0;background:#0a0a0a;border:1px solid #222;border-radius:10px;padding:6px;box-shadow:0 -10px 30px rgba(0,0,0,0.5);z-index:10;display:flex;flex-direction:column;gap:2px}
+  .user-menu-pop a{display:block;padding:8px 12px;border-radius:6px;color:#ccc;font-size:0.85rem;text-decoration:none;transition:background 0.1s}
+  .user-menu-pop a:hover{background:#1a1a1a;color:#fff}
+  .user-menu-pop hr{border:0;border-top:1px solid #222;margin:4px 6px}
+
+  /* Dashboard */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px}
+  .stat{background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:20px}
+  .stat .label{color:#666;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px}
+  .stat .value{font-size:1.75rem;font-weight:700;letter-spacing:-0.02em}
+  .stat .sub{color:#888;font-size:0.8rem;margin-top:4px}
+
+  /* Settings */
+  .settings-section{margin-bottom:32px}
+  .settings-row{display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid #1a1a1a}
+  .settings-row:last-child{border-bottom:0}
+  .settings-row .label{font-size:0.95rem}
+  .settings-row .label small{display:block;color:#666;font-size:0.8rem;margin-top:2px}
+  .settings-row .value{color:#888;font-family:ui-monospace,monospace;font-size:0.85rem}
+
+  /* Mobile: collapse sidebar to top bar */
+  @media (max-width: 768px) {
+    .sidebar{position:static;width:100%;flex-direction:row;padding:12px;gap:12px;border-right:0;border-bottom:1px solid #1a1a1a}
+    .sidebar-logo{display:none}
+    .sidebar-nav{flex-direction:row;overflow-x:auto;gap:4px;flex:initial}
+    .nav-item{padding:6px 10px;font-size:0.8rem}
+    .sidebar-footer{margin-top:0;padding-top:0;border-top:0}
+    .sidebar-user .user-menu summary{padding:6px 8px}
+    main{margin-left:0;padding:24px 16px}
+  }
 </style>
 </head>
 <body>
-<div class="topbar">
-  <div style="display:flex;align-items:center">
-    <div class="logo">void<span>// self-hosted Vercel</span></div>
-    <div class="nav">
-      <a href="/">Home</a>
-      <a href="/servers">Servers</a>
-      <a href="/projects">Projects</a>
-      <a href="/deployments">Deployments</a>
-    </div>
-  </div>
-  ${userBlock}
-</div>
-<div class="container">
+${sidebarBlock}
+<main>
 ${content}
-</div>
+</main>
 </body>
 </html>`;
 	return new Response(page, {
@@ -185,7 +255,7 @@ ${results.length === 0
 			.join("")}
 		</tbody>
 	</table></div>`}`;
-	return html(body, "Servers", { user });
+	return html(body, "Servers", { user, current: "/servers" });
 }
 
 // ============== Projects page ==============
@@ -231,7 +301,7 @@ ${results.length === 0
 			.join("")}
 		</tbody>
 	</table></div>`}`;
-	return html(body, "Projects", { user });
+	return html(body, "Projects", { user, current: "/projects" });
 }
 
 // ============== Deployments page ==============
@@ -308,7 +378,7 @@ ${results.length === 0
 		${page > 1 ? `<a href="?${projectFilter ? `project=${escape(projectFilter)}&` : ""}page=${page - 1}&per_page=${perPage}">← prev</a>` : ""}
 		${page < totalPages ? `<a href="?${projectFilter ? `project=${escape(projectFilter)}&` : ""}page=${page + 1}&per_page=${perPage}">next →</a>` : ""}
 	</div>`}`;
-	return html(body, "Deployments", { user });
+	return html(body, "Deployments", { user, current: "/deployments" });
 }
 
 // ============== Single deployment log viewer ==============
@@ -413,5 +483,151 @@ export async function renderDeploymentLogsPage(
 	// but for the EventSource to work cross-origin, we use the ?token= fallback. For same-origin (the UI),
 	// the cookie is sufficient and the ?token= is ignored.
 
-	return html(body, `${dep.id} · logs`, { user });
+	return html(body, `${dep.id} · logs`, { user, current: "/deployments" });
+}
+
+// ============================================================
+// Dashboard
+// ============================================================
+
+/**
+ * Overview page: stat tiles + recent activity. Queries D1 in parallel
+ * to keep latency low. Falls back to 0s on empty DB.
+ */
+export async function renderDashboardPage(
+	env: Env,
+	user: { username: string; avatar_url: string | null } | null,
+): Promise<Response> {
+	const [servers, projects, deploys, recent] = await Promise.all([
+		env.void_db.prepare("SELECT COUNT(*) AS n FROM servers").first<{ n: number }>(),
+		env.void_db.prepare("SELECT COUNT(*) AS n FROM projects").first<{ n: number }>(),
+		env.void_db.prepare("SELECT COUNT(*) AS n FROM deployments WHERE created_at > unixepoch() - 86400").first<{ n: number }>(),
+		env.void_db
+			.prepare(
+				`SELECT d.id, d.status, d.started_at, d.public_url, p.name AS project_name
+				 FROM deployments d LEFT JOIN projects p ON p.id = d.project_id
+				 ORDER BY d.started_at DESC LIMIT 8`,
+			)
+			.all<{ id: string; status: string; started_at: number; public_url: string | null; project_name: string | null }>(),
+	]);
+
+	const stats = [
+		{ label: "Servers", value: servers?.n ?? 0, sub: "active hosts" },
+		{ label: "Projects", value: projects?.n ?? 0, sub: "registered repos" },
+		{ label: "Deploys (24h)", value: deploys?.n ?? 0, sub: "last 24 hours" },
+	];
+
+	const recentRows = (recent?.results || []).map(
+		(d) => `<tr>
+			<td><code class="mono">${escape(d.id.slice(0, 12))}…</code></td>
+			<td>${d.project_name ? escape(d.project_name) : "<em>—</em>"}</td>
+			<td><span class="status status-${escape(d.status)}">${escape(d.status)}</span></td>
+			<td class="meta">${timeAgo(d.started_at)}</td>
+			<td>${d.public_url ? `<a href="${escape(d.public_url)}" target="_blank" rel="noopener">${escape(d.public_url.replace(/^https?:\/\//, ""))}</a>` : "—"}</td>
+		</tr>`,
+	).join("");
+
+	const body = `
+<h1>Dashboard</h1>
+
+<div class="stats">
+	${stats
+		.map(
+			(s) => `<div class="stat">
+				<div class="label">${escape(s.label)}</div>
+				<div class="value">${s.value}</div>
+				<div class="sub">${escape(s.sub)}</div>
+			</div>`,
+		)
+		.join("")}
+</div>
+
+<div class="card">
+	<h2 style="margin-top:0">Recent deployments</h2>
+	${recentRows
+		? `<table>
+			<thead><tr><th>ID</th><th>Project</th><th>Status</th><th>Started</th><th>URL</th></tr></thead>
+			<tbody>${recentRows}</tbody>
+		</table>`
+		: `<div class="empty"><h2>No deployments yet</h2><p>Deploys appear here when you push code (via webhook) or call <code>void_deploy</code> via MCP.</p></div>`}
+</div>
+<div class="actions">
+	<a href="/servers" class="btn btn-secondary">Manage servers</a>
+	<a href="/projects" class="btn btn-secondary">Manage projects</a>
+	<a href="/deployments" class="btn btn-secondary">All deployments</a>
+</div>
+`;
+
+	return html(body, "Dashboard", { user, current: "/dashboard" });
+}
+
+// ============================================================
+// Settings
+// ============================================================
+
+/**
+ * Account info + GitHub OAuth status. Reads the current user from
+ * the session (which includes gh_access_token — not displayed) to
+ * show username + avatar + login provider.
+ */
+export async function renderSettingsPage(
+	env: Env,
+	user: { id: string; username: string; avatar_url: string | null } | null,
+): Promise<Response> {
+	// Look up full user record for accurate info
+	const fullUser = user
+		? await env.void_db
+				.prepare(
+					"SELECT id, username, avatar_url, github_id, created_at FROM users WHERE id = ?",
+				)
+				.bind(user.id)
+				.first<{ id: string; username: string; avatar_url: string | null; github_id: string; created_at: number }>()
+		: null;
+
+	const body = `
+<h1>Settings</h1>
+
+<div class="card">
+	<h2 style="margin-top:0">Account</h2>
+	${fullUser
+		? `<div class="settings-row">
+				<div class="label">Username<small>Your GitHub login</small></div>
+				<div class="value">@${escape(fullUser.username)}</div>
+			</div>
+			<div class="settings-row">
+				<div class="label">GitHub ID<small>Immutable</small></div>
+				<div class="value">${escape(fullUser.github_id)}</div>
+			</div>
+			<div class="settings-row">
+				<div class="label">Joined<small>Account created</small></div>
+				<div class="value">${timeAgo(fullUser.created_at)}</div>
+			</div>`
+		: `<p class="meta">Not signed in</p>`}
+</div>
+
+<div class="card">
+	<h2 style="margin-top:0">Authentication</h2>
+	<div class="settings-row">
+		<div class="label">Sign-in method<small>How you authenticate</small></div>
+		<div class="value">GitHub OAuth</div>
+	</div>
+	<div class="settings-row">
+		<div class="label">Session lifetime<small>Cookie TTL</small></div>
+		<div class="value">30 days</div>
+	</div>
+	<div class="actions" style="margin-top:16px">
+		<a href="/api/auth/logout" class="btn btn-secondary">Sign out</a>
+	</div>
+</div>
+
+<div class="card">
+	<h2 style="margin-top:0">Danger zone</h2>
+	<div class="settings-row">
+		<div class="label">Delete account<small>Permanently remove your account and all data</small></div>
+		<button class="btn btn-danger" disabled>Delete account</button>
+	</div>
+</div>
+`;
+
+	return html(body, "Settings", { user, current: "/settings" });
 }

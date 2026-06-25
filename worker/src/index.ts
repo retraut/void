@@ -41,6 +41,8 @@ import {
 	renderProjectsPage,
 	renderDeploymentsPage,
 	renderDeploymentLogsPage,
+	renderDashboardPage,
+	renderSettingsPage,
 } from "./ui";
 
 export { VoidCell };
@@ -185,6 +187,9 @@ app.all("/api/cell/:serverId", async (c) => forwardToCell(c, c.req.param("server
 
 app.get("/", async (c) => {
 	const user = await getSessionUser(c);
+	// Logged-in users go straight to the admin dashboard. The marketing
+	// landing page is for first-time visitors only.
+	if (user) return c.redirect("/dashboard");
 	const env = c.env;
 	const html = renderLandingHtml({
 		user,
@@ -292,6 +297,10 @@ app.get("/api/servers", async (c) => {
 // UI pages (require session cookie)
 // ============================================================
 
+app.get("/dashboard", requireSession, async (c) => {
+	return renderDashboardPage(c.env, c.get("user"));
+});
+
 app.get("/servers", requireSession, async (c) => {
 	return renderServersPage(c.env, c.get("user"));
 });
@@ -309,6 +318,10 @@ app.get("/deployments", requireSession, async (c) => {
 
 app.get("/deployments/:id", requireSession, async (c) => {
 	return renderDeploymentLogsPage(c.env, c.get("user"), c.req.param("id"));
+});
+
+app.get("/settings", requireSession, async (c) => {
+	return renderSettingsPage(c.env, c.get("user"));
 });
 
 // UI form action: rotate session token (POST from the rotate button)
