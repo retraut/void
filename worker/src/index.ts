@@ -360,7 +360,7 @@ app.post("/settings/hetzner", requireSession, async (c) => {
 			`/settings?toast=error&msg=${encodeURIComponent(verify.reason || "Token verification failed")}`,
 		);
 	}
-	await setProviderToken(c.env, c.get("user").id, "hetzner", token);
+	await setProviderToken(c.env, c.get("user").id, "hetzner", token, verify.datacenters);
 	return c.redirect(
 		`/settings?toast=success&msg=${encodeURIComponent(`Hetzner token saved (verified — ${verify.datacenters} datacenters reachable)`)}`,
 	);

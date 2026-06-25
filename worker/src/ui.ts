@@ -805,7 +805,10 @@ ${toast}
 		<div class="value" style="text-align:right">
 			${
 				hetznerCred
-					? `<span class="meta">✓ Token saved ${timeAgo(hetznerCred.created_at)}</span>
+					? `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+						<span class="meta">✓ Token saved ${timeAgo(hetznerCred.created_at)}</span>
+						${hetznerCred.verified_datacenters ? `<span class="meta" style="color:#0a8">${hetznerCred.verified_datacenters} datacenters reachable</span>` : ""}
+					</div>
 					<form method="POST" action="/settings/hetzner/delete" style="margin-top:8px" onsubmit="return confirm('Delete Hetzner API token? New server creates will fall back to env HETZNER_TOKEN if set, otherwise use stub mode.')">
 						<button type="submit" class="btn btn-secondary" style="padding:6px 12px;font-size:0.85rem">Delete token</button>
 					</form>`

@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS provider_credentials (
 	user_id TEXT NOT NULL,
 	provider TEXT CHECK(provider IN ('hetzner')) NOT NULL,
 	encrypted_token TEXT NOT NULL,
+	verified_datacenters INTEGER,
 	created_at INTEGER DEFAULT (unixepoch()),
 	UNIQUE(user_id, provider)
 );
@@ -101,6 +102,7 @@ const COLUMN_MIGRATIONS: Array<{ table: string; column: string; type: string }> 
 	{ table: "deployments", column: "public_url", type: "TEXT" },
 	{ table: "deployments", column: "dns_record_id", type: "TEXT" },
 	{ table: "deployments", column: "port", type: "INTEGER" },
+	{ table: "provider_credentials", column: "verified_datacenters", type: "INTEGER" },
 ];
 
 let migrated = false;

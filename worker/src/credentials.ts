@@ -69,12 +69,15 @@ export async function verifyHetznerToken(
 
 /**
  * Save (or update) a user's token for a provider. Encrypts before write.
+ * Stores the verified datacenters count (if available) so the UI can
+ * show "Token saved — N datacenters reachable" without re-verifying.
  */
 export async function setProviderToken(
 	env: Env,
 	userId: string,
 	provider: Provider,
 	token: string,
+	verifiedDatacenters?: number,
 ): Promise<void> {
 	const key = env.ENCRYPTION_KEY || env.COOKIE_SECRET;
 	if (!key) throw new Error("ENCRYPTION_KEY (or COOKIE_SECRET) not configured");
@@ -83,13 +86,14 @@ export async function setProviderToken(
 	const now = Math.floor(Date.now() / 1000);
 	await env.void_db
 		.prepare(
-			`INSERT INTO provider_credentials (id, user_id, provider, encrypted_token, created_at)
-			 VALUES (?, ?, ?, ?, ?)
+			`INSERT INTO provider_credentials (id, user_id, provider, encrypted_token, verified_datacenters, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(user_id, provider) DO UPDATE SET
 			   encrypted_token = excluded.encrypted_token,
+			   verified_datacenters = excluded.verified_datacenters,
 			   created_at      = excluded.created_at`,
 		)
-		.bind(id, userId, provider, encrypted, now)
+		.bind(id, userId, provider, encrypted, verifiedDatacenters ?? null, now)
 		.run();
 }
 
@@ -113,15 +117,16 @@ export async function deleteProviderToken(
 export async function listProviderCredentials(
 	env: Env,
 	userId: string,
-): Promise<Array<{ provider: Provider; created_at: number }>> {
+): Promise<Array<{ provider: Provider; created_at: number; verified_datacenters: number | null }>> {
 	const rows = await env.void_db
 		.prepare(
-			"SELECT provider, created_at FROM provider_credentials WHERE user_id = ? ORDER BY created_at DESC",
+			"SELECT provider, created_at, verified_datacenters FROM provider_credentials WHERE user_id = ? ORDER BY created_at DESC",
 		)
 		.bind(userId)
-		.all<{ provider: string; created_at: number }>();
+		.all<{ provider: string; created_at: number; verified_datacenters: number | null }>();
 	return rows.results.map((r) => ({
 		provider: r.provider as Provider,
 		created_at: r.created_at,
+		verified_datacenters: r.verified_datacenters,
 	}));
 }
