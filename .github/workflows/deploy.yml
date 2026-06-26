@@ -37,6 +37,59 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # Preflight: list which OAuth secrets are present in the repo,
+      # build a filtered `secrets:` payload for wrangler-action. The
+      # action errors out hard if any name in `secrets:` is empty —
+      # we only want to upload secrets that are actually configured.
+      # Missing OAuth secrets just mean OAuth login won't work yet;
+      # the deploy itself still succeeds.
+      - name: Preflight — filter configured secrets
+        id: preflight
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+        run: |
+          set -e
+          # CLOUDFLARE_API_TOKEN is required (the action authenticates
+          # with Cloudflare via this token). Fail fast with a clear
+          # message instead of letting the action's cryptic error
+          # bubble up.
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            {
+              echo "::error::CLOUDFLARE_API_TOKEN is not set in repo secrets."
+              echo "::error::Add it at: https://github.com/retraut/void/settings/secrets/actions"
+              echo "::error::Get a token from Cloudflare → My Profile → API Tokens → Create Token (use the 'Edit Cloudflare Workers' template)."
+            } >&2
+            exit 1
+          fi
+
+          payload=""
+          missing=()
+          for s in GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET; do
+            if [ -n "${!s}" ]; then
+              payload+="${s}"$'\n'"${!s}"$'\n'
+            else
+              missing+=("$s")
+            fi
+          done
+          # Strip the trailing newline (required by wrangler-action's parser).
+          payload="${payload%$'\n'}"
+          {
+            echo "payload<<__EOF__"
+            echo "$payload"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            {
+              echo "::warning::OAuth secrets not set in repo: ${missing[*]}"
+              echo "::warning::Worker will deploy, but OAuth login (Continue with GitHub) will fail until you add them."
+              echo "::warning::Add them at: https://github.com/retraut/void/settings/secrets/actions"
+              echo "::warning::Tip: all other tokens (Hetzner, CF API, GitHub App, agent HMAC, etc.) are managed in the panel itself at /settings → System settings."
+            } >&2
+          fi
+
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
@@ -49,11 +102,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: worker
           command: deploy
-          secrets: |
-            GITHUB_CLIENT_ID
-            ${{ secrets.GITHUB_CLIENT_ID }}
-            GITHUB_CLIENT_SECRET
-            ${{ secrets.GITHUB_CLIENT_SECRET }}
+          secrets: ${{ steps.preflight.outputs.payload }}
 
       - name: Smoke-test the live URL
         run: |
