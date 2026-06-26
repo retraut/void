@@ -30,10 +30,11 @@ describe("buildCloudInit()", () => {
 		expect(userData).toMatch(/chmod \+x \/usr\/local\/bin\/cloudflared/);
 
 		// void-agent download + extract
-		// The arch is computed at runtime via `uname -m | sed ...`,
-		// inlined directly in the curl URL (not via a separate var).
-		expect(userData).toContain("releases/download/v0.1.0/void-agent-linux-");
-		expect(userData).toContain("$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/')");
+		// v0.1.1+ uses `void-agent-{tag}.tar.gz` (fat binary, no arch in
+		// the asset name; tag already starts with "v" so no prepending).
+		// v0.1.0 used a different name and is unsupported.
+		expect(userData).toContain("releases/download/v0.1.0/void-agent-v0.1.0.tar.gz");
+		expect(userData).toContain("https://github.com/retraut/void/");
 		expect(userData).toContain("tar -xzf void-agent.tar.gz");
 		expect(userData).toContain("mv void-agent /usr/local/bin/void-agent");
 		expect(userData).toContain('server_id = "srv_test12345678"');
@@ -63,7 +64,18 @@ describe("buildCloudInit()", () => {
 		expect(ud).toContain('server_id = "srv_AAAA"');
 		expect(ud).toContain('setup_token = "set_BBBB"');
 		expect(ud).toContain('api_base = "wss://example.com"');
-		expect(ud).toContain("releases/download/v9.9.9/void-agent-linux");
+		expect(ud).toContain("releases/download/v9.9.9/void-agent-v9.9.9.tar.gz");
+	});
+
+	it("uses a custom github_repo when provided (fork support)", () => {
+		const ud = buildCloudInit({
+			server_id: "srv_x",
+			setup_token: "set_x",
+			api_base: "wss://x",
+			github_release_tag: "v0.3.1",
+			github_repo: "myfork/void",
+		});
+		expect(ud).toContain("https://github.com/myfork/void/releases/download/v0.3.1/void-agent-v0.3.1.tar.gz");
 	});
 });
 

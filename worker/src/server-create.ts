@@ -17,7 +17,7 @@ export interface CreateServerInput {
 	name: string;
 	size: string; // e.g. "cx22"
 	region: string; // e.g. "fsn1"
-	image: string; // e.g. "ubuntu-24.04"
+	image: string; // e.g. "ubuntu-26.04"
 }
 
 export interface CreateServerResult {
@@ -96,7 +96,8 @@ export async function createServerForUser(
 		server_id: serverId,
 		setup_token: setupToken,
 		api_base: apiBase,
-		github_release_tag: env.VOID_AGENT_RELEASE_TAG || "v0.1.0",
+		github_release_tag: env.VOID_AGENT_RELEASE_TAG || "v0.3.1",
+		github_repo: (env as any).VOID_AGENT_REPO || undefined,
 	});
 
 	try {

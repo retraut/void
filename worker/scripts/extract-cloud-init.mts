@@ -7,13 +7,16 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { buildCloudInit } from "../src/hetzner.ts";
 
+// Use the latest published release so the test actually downloads
+// the real void-agent binary and the full bootstrap succeeds.
 const userData = buildCloudInit({
 	server_id: "srv_test12345678",
 	setup_token: "set_test12345678",
 	api_base: "wss://void.example.com",
-	github_release_tag: "v0.1.0",
+	github_release_tag: "v0.3.1",
 });
 
 mkdirSync("test/output", { recursive: true });
 writeFileSync("test/output/user_data.sh", userData, "utf-8");
 console.log(`Wrote test/output/user_data.sh (${userData.length} bytes)`);
+

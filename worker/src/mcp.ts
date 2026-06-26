@@ -52,7 +52,7 @@ const TOOLS = [
 				name: { type: "string", description: "Friendly name, e.g. 'prod-1'" },
 				size: { type: "string", description: "Hetzner server type, e.g. 'cx22' (€4.50/mo, 2vCPU/4GB)", default: "cx22" },
 				region: { type: "string", description: "Hetzner location, e.g. 'fsn1' (Falkenstein, DE)", default: "fsn1" },
-				image: { type: "string", description: "OS image", default: "ubuntu-24.04" },
+				image: { type: "string", description: "OS image", default: "ubuntu-26.04" },
 			},
 			required: ["name"],
 		},
@@ -191,7 +191,7 @@ export async function handleMcp(c: any): Promise<Response> {
 					const name = args.name as string;
 					const region = (args.region as string) || "fsn1";
 					const size = (args.size as string) || "cx22";
-					const image = (args.image as string) || "ubuntu-24.04";
+					const image = (args.image as string) || "ubuntu-26.04";
 
 					// Provider guard — only hetzner + stub supported for now
 					if (provider !== "hetzner" && provider !== "stub") {

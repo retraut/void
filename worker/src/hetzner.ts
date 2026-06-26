@@ -318,19 +318,27 @@ export async function listProjects(env: Env, token: string): Promise<HetznerProj
  *  - server_id: pre-generated ULID
  *  - setup_token: one-time token for first registration
  *  - api_base: Worker URL the agent should connect to (wss://...)
- *  - github_release_url: full URL to the agent binary tarball/zip on GitHub releases
- *  - github_release_tag: tag name (e.g. v0.1.0)
+ *  - github_release_tag: tag name (e.g. "v0.3.1"). The agent tarball
+ *    lives at `releases/download/{tag}/void-agent-v{tag}.tar.gz`
+ *    (v0.1.1+; the v0.1.0 release used a different name with arch in it
+ *    and is no longer supported by this script).
+ *  - github_repo: "owner/repo" slug. Default "retraut/void" (this repo,
+ *    personal — no org). Override via `VOID_AGENT_REPO` env if you
+ *    fork.
  */
 export function buildCloudInit(args: {
 	server_id: string;
 	setup_token: string;
 	api_base: string;
 	github_release_tag: string;
+	github_repo?: string;
 }): string {
 	const { server_id, setup_token, api_base, github_release_tag } = args;
-	// GitHub release asset URL — adjust if agent binary name differs
-	const arch = "$(uname -m | sed 's/x86_64/x86_64/;s/aarch64/aarch64/')";
-	const agent_url = `https://github.com/void-sh/void/releases/download/${github_release_tag}/void-agent-linux-${arch}.tar.gz`;
+	const repo = args.github_repo || "retraut/void";
+	// Agent tarball URL — v0.1.1+ convention: void-agent-{tag}.tar.gz
+	// (the tag already starts with "v", so we don't prepend another).
+	// v0.1.0 used `void-agent-linux-x86_64.tar.gz` and is not handled here.
+	const agent_url = `https://github.com/${repo}/releases/download/${github_release_tag}/void-agent-${github_release_tag}.tar.gz`;
 
 	return `#!/bin/bash
 set -e
@@ -410,7 +418,7 @@ export async function createServer(
 	args: {
 		name: string;
 		server_type: string; // "cx22", "cx32", etc
-		image: string; // "ubuntu-24.04"
+		image: string; // e.g. "ubuntu-26.04"
 		location: string; // "fsn1", "nbg1", etc
 		user_data: string;
 	},

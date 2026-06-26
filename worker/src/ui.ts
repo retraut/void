@@ -1461,7 +1461,7 @@ export async function renderNewServerPage(
 	const pickDefaultImage = (imgs: any[]): string => {
 		const ubuntus = imgs.filter((i) => i.os_flavor === "ubuntu");
 		const pool = ubuntus.length ? ubuntus : imgs;
-		if (!pool.length) return "ubuntu-24.04";
+		if (!pool.length) return "ubuntu-26.04";
 		const scored = pool
 			.map((i) => {
 				const m = (i.name || "").match(/(\d+)\.(\d+)/);

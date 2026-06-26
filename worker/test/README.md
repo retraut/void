@@ -12,9 +12,10 @@ pnpm test:cloud-init
 This runs (in order):
 
 1. `vitest` — validates the user_data structure (shebang, set -e, key
-   strings, inlined test values).
+   strings, inlined test values, correct agent URL for the tag).
 2. `tsx scripts/extract-cloud-init.mts` — writes the real user_data
-   (from `buildCloudInit`) to `test/output/user_data.sh`.
+   (from `buildCloudInit`) to `test/output/user_data.sh`, using the
+   latest published release (`v0.3.1`) so the download actually works.
 3. `docker build -f test/Dockerfile -t void-bootstrap-test .` — builds
    a fresh Ubuntu 24.04 image.
 4. `docker run --rm void-bootstrap-test` — runs the user_data and
@@ -29,17 +30,32 @@ The bootstrap script does (in order):
 3. Download the `void-agent` binary from GitHub releases
 4. Write `/etc/void/config.toml` (server_id, setup_token, api_base)
 5. Install the `void-agent.service` systemd unit
-6. Enable + start the service
+6. Enable + start the service (needs systemd as PID 1 — won't run
+   in a plain Docker container, but works in a real Hetzner VM)
 
-The test currently fails at step 3 because there's no real
-`void-agent-linux-*.tar.gz` published under any tag — `curl` returns
-404 and `set -e` aborts. That's the expected behavior; once you
-publish the first release (e.g. `v0.1.0`) with the agent binary
-attached, the test will pass end-to-end.
+The script uses `set -e` so any failure aborts. The Docker test runs
+the script with `|| true` to keep the build going and then inspects
+the state via a follow-up `RUN` step.
 
-Until then, the test verifies that steps 1 and 2 succeed and the
-script structure is correct. Inspect `test/output/user_data.sh` for
-the exact bash the agent will execute in production.
+## Current state
+
+The bootstrap reaches step 4 (config write) and step 5 (systemd unit
+write) successfully. The script then aborts because the `void-agent`
+binary in the v0.3.1 tarball is a **macOS Mach-O** binary, not a
+**Linux ELF** — so the cosmetic `$(... --version)` subshell fails
+with "Exec format error". In a real Hetzner VM (where systemd is PID
+1 and the agent binary is a real Linux ELF), the script completes
+end-to-end.
+
+**Two things need to happen for the test to fully pass:**
+
+1. The agent tarball needs to contain a Linux ELF binary (cross-compile
+   from macOS, or build on Linux). This is a one-time release-time fix.
+2. The systemd `enable --now` step needs systemd as PID 1 — which is
+   a Docker limitation. We can spin up a privileged container with
+   `docker run --privileged --tmpfs /run --tmpfs /run/lock:noexec,...`
+   and `ENTRYPOINT ["/sbin/init"]` for a real systemd test, but the
+   smoke test as-is is enough to validate the script structure.
 
 ## Manual inspection
 
@@ -63,7 +79,7 @@ The script is also what Hetzner stores in the VM's
 
 ## Files
 
-- `cloud-init.test.ts` — vitest assertions (structure + values)
+- `cloud-init.test.ts` — vitest assertions (structure + values + URL)
 - `Dockerfile` — Ubuntu 24.04 base, installs curl + ca-certificates,
   runs `user_data.sh` with `|| true`, prints final state
 - `../scripts/extract-cloud-init.mts` — generates the real user_data
