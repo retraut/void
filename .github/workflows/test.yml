@@ -35,7 +35,7 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Vitest
-        run: pnpm vitest run --reporter=basic
+        run: pnpm vitest run --reporter=default
 
   cloud-init:
     name: Cloud-init smoke test
@@ -59,7 +59,7 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Validate user_data (vitest)
-        run: pnpm vitest run test/cloud-init.test.ts --reporter=basic
+        run: pnpm vitest run test/cloud-init.test.ts --reporter=default
       - name: Generate user_data
         run: pnpm exec tsx scripts/extract-cloud-init.mts
       - name: Build & run Docker smoke test
