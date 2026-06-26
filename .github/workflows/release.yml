@@ -29,8 +29,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
-          # Pin to a known-good stable. Bump manually for new Rust.
-          toolchain: 1.83.0
+          # Use latest stable. Pinned 1.83.0 broke on transitive deps
+          # (base64ct 1.8.3+ requires edition2024 = Rust 1.85+).
+          # Bump manually if we hit a regression in a specific version.
+          toolchain: 1.88.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
