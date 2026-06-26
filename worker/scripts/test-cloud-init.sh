@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test the cloud-init user_data in a fresh Ubuntu 24.04 container.
+# Test the cloud-init user_data in a fresh Ubuntu 26.04 container.
 #
 # 1. Run vitest to validate the script structure.
 # 2. Run scripts/extract-cloud-init.mts (via tsx) to write the real
@@ -8,9 +8,10 @@
 # 4. Run it and print the state.
 #
 # Requires: pnpm, docker, and the agent-binary URL in buildCloudInit
-# to 404 cleanly (which it does — the release doesn't exist yet, so
-# the smoke test fails at the agent download but verifies everything
-# before that point).
+# to actually resolve to a real release. As of v0.4.0 the release
+# workflow produces a Linux ELF for x86_64, so the smoke test runs
+# the full bootstrap (modulo the cosmetic `$(... --version)` echo
+# if the glibc in the container differs from the GitHub runner).
 #
 # Usage:
 #   ./scripts/test-cloud-init.sh

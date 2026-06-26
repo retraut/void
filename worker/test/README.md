@@ -1,7 +1,7 @@
 # cloud-init smoke test
 
 Tests the bash user_data that `buildCloudInit()` (in `src/hetzner.ts`)
-generates, by running it in a fresh Ubuntu 24.04 container.
+generates, by running it in a fresh Ubuntu 26.04 container.
 
 ## Quick run
 
@@ -15,9 +15,9 @@ This runs (in order):
    strings, inlined test values, correct agent URL for the tag).
 2. `tsx scripts/extract-cloud-init.mts` — writes the real user_data
    (from `buildCloudInit`) to `test/output/user_data.sh`, using the
-   latest published release (`v0.3.1`) so the download actually works.
+   latest published release (`v0.4.0`) so the download actually works.
 3. `docker build -f test/Dockerfile -t void-bootstrap-test .` — builds
-   a fresh Ubuntu 24.04 image.
+   a fresh Ubuntu 26.04 image.
 4. `docker run --rm void-bootstrap-test` — runs the user_data and
    prints the bootstrap log.
 
@@ -39,23 +39,14 @@ the state via a follow-up `RUN` step.
 
 ## Current state
 
-The bootstrap reaches step 4 (config write) and step 5 (systemd unit
-write) successfully. The script then aborts because the `void-agent`
-binary in the v0.3.1 tarball is a **macOS Mach-O** binary, not a
-**Linux ELF** — so the cosmetic `$(... --version)` subshell fails
-with "Exec format error". In a real Hetzner VM (where systemd is PID
-1 and the agent binary is a real Linux ELF), the script completes
-end-to-end.
-
-**Two things need to happen for the test to fully pass:**
-
-1. The agent tarball needs to contain a Linux ELF binary (cross-compile
-   from macOS, or build on Linux). This is a one-time release-time fix.
-2. The systemd `enable --now` step needs systemd as PID 1 — which is
-   a Docker limitation. We can spin up a privileged container with
-   `docker run --privileged --tmpfs /run --tmpfs /run/lock:noexec,...`
-   and `ENTRYPOINT ["/sbin/init"]` for a real systemd test, but the
-   smoke test as-is is enough to validate the script structure.
+As of v0.4.0, the bootstrap reaches step 4 (config write) and
+step 5 (systemd unit write) successfully, and the `void-agent`
+binary inside the tarball is a real **Linux ELF** (built by the
+release workflow on `ubuntu-latest`). The cosmetic `$(... --version)`
+echo may still fail in Docker if glibc versions differ between the
+build host and the container, but the binary itself runs and the
+config + systemd unit are in place — exactly what's needed for a
+real Hetzner VM to come up.
 
 ## Manual inspection
 
@@ -68,7 +59,7 @@ The script is also what Hetzner stores in the VM's
 
 ## Why Docker (not the host)
 
-- Reproducible: every run is a fresh `ubuntu:24.04`, no leftover
+- Reproducible: every run is a fresh `ubuntu:26.04`, no leftover
   state from previous tests.
 - Safe: the agent install is destructive (`/usr/local/bin/void-agent`),
   we don't want to touch the host.
@@ -80,7 +71,7 @@ The script is also what Hetzner stores in the VM's
 ## Files
 
 - `cloud-init.test.ts` — vitest assertions (structure + values + URL)
-- `Dockerfile` — Ubuntu 24.04 base, installs curl + ca-certificates,
+- `Dockerfile` — Ubuntu 26.04 base, installs curl + ca-certificates,
   runs `user_data.sh` with `|| true`, prints final state
 - `../scripts/extract-cloud-init.mts` — generates the real user_data
 - `../scripts/test-cloud-init.sh` — orchestrator (`pnpm test:cloud-init`)

@@ -13,7 +13,7 @@ const userData = buildCloudInit({
 	server_id: "srv_test12345678",
 	setup_token: "set_test12345678",
 	api_base: "wss://void.example.com",
-	github_release_tag: "v0.3.1",
+	github_release_tag: "v0.4.0",
 });
 
 mkdirSync("test/output", { recursive: true });

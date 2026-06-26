@@ -23,13 +23,13 @@ jobs:
     name: Build void-agent (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
-          # Use latest stable. Pinned 1.83.0 broke on transitive deps
+          # Pinned to 1.88.0. 1.83.0 broke on transitive deps
           # (base64ct 1.8.3+ requires edition2024 = Rust 1.85+).
           # Bump manually if we hit a regression in a specific version.
           toolchain: 1.88.0
@@ -77,13 +77,13 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
 
       - name: Upload tarball (workflow artifact)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: void-agent-tarball
           path: void-agent-v${{ github.ref_name }}.tar.gz
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
