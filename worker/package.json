@@ -7,13 +7,11 @@
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "test": "vitest",
-    "test:cloud-init": "bash scripts/test-cloud-init.sh",
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.4",
     "@types/node": "^26.0.1",
-    "tsx": "^4.22.4",
     "typescript": "^5.5.2",
     "vitest": "~3.2.0",
     "wrangler": "3.114.17"
