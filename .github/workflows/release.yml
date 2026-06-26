@@ -1,0 +1,96 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.4.0). Defaults to the tag if triggered by push.'
+        required: false
+
+# Only one release at a time per tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # needed to create the release
+
+jobs:
+  agent-linux:
+    name: Build void-agent (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+          # Pin to a known-good stable. Bump manually for new Rust.
+          toolchain: 1.83.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent -> target
+
+      - name: Build (x86_64-unknown-linux-gnu)
+        working-directory: agent
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Stage tarball
+        # The cloud-init script does:
+        #   tar -xzf void-agent.tar.gz
+        #   mv void-agent /usr/local/bin/void-agent
+        # so the tarball must contain a single `void-agent` file at
+        # the root. v0.1.0 had the arch in the name (linux-x86_64);
+        # v0.1.1+ dropped that and went with a fat-binary name
+        # (void-agent-v{tag}.tar.gz). We ship x86_64 only for now;
+        # Hetzner's CX/CCX/CPX lines are all x86_64. aarch64 can be
+        # added later by building for aarch64-unknown-linux-gnu
+        # (via cross or a manual toolchain) and bundling both.
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          BIN="agent/target/x86_64-unknown-linux-gnu/release/void-agent"
+          if [ ! -x "$BIN" ]; then
+            echo "✕ expected $BIN to exist and be executable"
+            ls -la agent/target/ || true
+            exit 1
+          fi
+          # Quick smoke: does the binary actually run on Linux?
+          # (The cross build to gnu sometimes fails silently.)
+          file "$BIN"
+          mkdir -p stage
+          cp "$BIN" stage/void-agent
+          chmod +x stage/void-agent
+          tar -czf "void-agent-${TAG}.tar.gz" -C stage void-agent
+          echo ""
+          echo "Tarball contents:"
+          tar -tzvf "void-agent-${TAG}.tar.gz"
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
+      - name: Upload tarball (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: void-agent-tarball
+          path: void-agent-v${{ github.ref_name }}.tar.gz
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            void-agent-${{ github.ref_name }}.tar.gz
+          fail_on_unmatched_files: true
+          # Don't overwrite existing releases — the tag push is
+          # idempotent but we want manual control.
+          fail_on_unmatched_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

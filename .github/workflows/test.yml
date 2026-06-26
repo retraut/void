@@ -1,0 +1,78 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same branch on new pushes.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vitest:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: worker/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Vitest
+        run: pnpm vitest run --reporter=basic
+
+  cloud-init:
+    name: Cloud-init smoke test
+    runs-on: ubuntu-latest
+    # ubuntu-latest runners have Docker pre-installed and the daemon
+    # running by default — `docker build` and `docker run` work out of
+    # the box.
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: worker/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Validate user_data (vitest)
+        run: pnpm vitest run test/cloud-init.test.ts --reporter=basic
+      - name: Generate user_data
+        run: pnpm exec tsx scripts/extract-cloud-init.mts
+      - name: Build & run Docker smoke test
+        # The script fetches the real void-agent from
+        # github.com/retraut/void/releases/latest, so this test depends
+        # on there being a Linux ELF binary published. If the most
+        # recent release only has a macOS Mach-O, the test will run
+        # the script up to the agent download + extract + install, then
+        # fail on the cosmetic `$(... --version)` echo. That's a real
+        # release-time bug, not a code bug — the workflow logs will
+        # show exactly which step failed.
+        run: bash scripts/test-cloud-init.sh
+      - name: Upload bootstrap log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-init-bootstrap-log
+          path: worker/test/output/
+          if-no-files-found: ignore

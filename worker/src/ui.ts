@@ -1454,24 +1454,15 @@ export async function renderNewServerPage(
 	const selRegion = (r: string) => v.region === r ? "checked" : "";
 	const selSize = (s: string) => v.size === s ? "checked" : (v.size ? "" : (s === "cx22" ? "checked" : ""));
 
-	// Pick the default image: highest-version Ubuntu LTS in the catalog.
-	// If no Ubuntu is offered, fall back to the first image. The void
-	// agent is built and tested on Ubuntu LTS — other distros may work
-	// but are advanced/experimental.
-	const pickDefaultImage = (imgs: any[]): string => {
-		const ubuntus = imgs.filter((i) => i.os_flavor === "ubuntu");
-		const pool = ubuntus.length ? ubuntus : imgs;
-		if (!pool.length) return "ubuntu-26.04";
-		const scored = pool
-			.map((i) => {
-				const m = (i.name || "").match(/(\d+)\.(\d+)/);
-				return m ? { name: i.name, score: parseInt(m[1]) * 100 + parseInt(m[2]) } : { name: i.name, score: 0 };
-			})
-			.sort((a, b) => b.score - a.score);
-		return scored[0].name;
-	};
-	const defaultImage = pickDefaultImage(images);
-	const selImage = (i: string) => v.image === i ? "checked" : (v.image ? "" : (i === defaultImage ? "checked" : ""));
+	// Default OS image — explicit, not dynamic. The void agent is built
+	// and tested on Ubuntu LTS; we pin to the LTS we know works. The
+	// user can change it in the "Advanced" section if they want. If the
+	// Hetzner catalog returns zero images, we treat that as a real
+	// failure (the Hetzner API or the token is broken) — see the
+	// images-empty check in the body builder below.
+	const DEFAULT_IMAGE = "ubuntu-26.04";
+	const defaultImage = v.image || DEFAULT_IMAGE;
+	const selImage = (i: string) => v.image === i ? "checked" : (v.image ? "" : (i === DEFAULT_IMAGE ? "checked" : ""));
 
 	// No token at all → "add token" card
 	const body = !token
@@ -1506,6 +1497,11 @@ ${toast}
 
 ${opts.error ? `<div class="form-error">✕ ${escape(opts.error)}</div>` : ""}
 ${catalogError ? `<div class="form-error">✕ Failed to load Hetzner catalog: ${escape(catalogError)}. Check your token in <a href="/settings" style="color:#6cf;text-decoration:underline">/settings</a>.</div>` : ""}
+${
+	!catalogError && (images.length === 0 || locations.length === 0 || types.length === 0)
+		? `<div class="form-error">✕ Hetzner API returned an empty catalog (${images.length} images, ${locations.length} locations, ${types.length} server types). This usually means the Hetzner Cloud API is down or your token is restricted. Check <a href="https://status.hetzner.cloud" target="_blank" rel="noopener" style="color:#6cf;text-decoration:underline">status.hetzner.cloud</a> and your <a href="/settings" style="color:#6cf;text-decoration:underline">/settings</a>.</div>`
+		: ""
+}
 
 <form method="POST" action="/servers/new" id="new-server-form">
 	<div class="form-section">
