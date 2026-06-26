@@ -28,7 +28,10 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: worker/pnpm-lock.yaml
+          # Root has the pnpm-lock.yaml; worker is a sub-package.
+          # Cache key is hashed from this file's content, so any
+          # dep change (root or worker) invalidates the cache.
+          cache-dependency-path: pnpm-lock.yaml
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Vitest
@@ -52,7 +55,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: worker/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Validate user_data (vitest)
