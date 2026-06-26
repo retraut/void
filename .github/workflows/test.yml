@@ -53,6 +53,87 @@ jobs:
             worker/vitest-results.json
           if-no-files-found: ignore
 
+  agent-json-logs:
+    name: Agent JSON logging
+    runs-on: ubuntu-latest
+    # Build the void-agent release binary and verify that running it
+    # with LOG_FORMAT=json produces valid newline-delimited JSON
+    # on stderr. This catches regressions in the tracing-subscriber
+    # wiring (e.g. someone adding a field that Debug-formats a
+    # PathBuf — produces invalid JSON when wrapped by the json layer).
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+      - name: Build void-agent (release)
+        run: cargo build --release
+      - name: Run agent with LOG_FORMAT=json and validate output
+        # The agent will try to connect to ws://127.0.0.1:8787 and
+        # fail (no server is running here) — that's fine, we just
+        # need to capture the structured log output and validate it.
+        # We let it run for ~3 seconds so the connect-fail-retry
+        # loop emits a few log lines, then kill it.
+        run: |
+          rm -f agent-json.log
+          # Run the agent in the background, capture stderr.
+          LOG_FORMAT=json ./target/release/void-agent \
+            2> agent-json.log &
+          AGENT_PID=$!
+          sleep 3
+          kill -9 "$AGENT_PID" 2>/dev/null || true
+          wait "$AGENT_PID" 2>/dev/null || true
+          # Sanity: we should have written at least 1 line of output.
+          if [ ! -s agent-json.log ]; then
+            echo "✕ agent-json.log is empty"
+            exit 1
+          fi
+          # Every line must be valid JSON. jq is the strictest parser
+          # we have, use it.
+          if ! jq -e . agent-json.log >/dev/null 2>&1; then
+            echo "✕ at least one line in agent-json.log is NOT valid JSON"
+            echo "--- raw output ---"
+            cat agent-json.log
+            echo "--- end raw output ---"
+            exit 1
+          fi
+          # Every record must have these fields.
+          missing=$(jq -r '
+            map(
+              select(
+                (.timestamp // "") == ""
+                or (.level // "") == ""
+                or (.message // "") == ""
+                or (.target // "") == ""
+              ) | input_line_number
+            ) | join(",")
+          ' agent-json.log)
+          if [ -n "$missing" ]; then
+            echo "✕ lines missing required fields: $missing"
+            jq . agent-json.log
+            exit 1
+          fi
+          echo "✓ all $(wc -l < agent-json.log) lines are valid JSON with the expected schema"
+          echo "  first 3 records:"
+          head -3 agent-json.log | jq -c .
+      - name: Upload agent log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-json-log
+          path: agent/agent-json.log
+          if-no-files-found: ignore
+
   cloud-init:
     name: Cloud-init smoke test
     runs-on: ubuntu-latest

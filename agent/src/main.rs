@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time::{interval, sleep};
@@ -38,26 +38,76 @@ struct LogLine {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+	let _ = rustls::crypto::ring::default_provider().install_default();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+	// Logging format. Selected via LOG_FORMAT env var:
+	//   text (default)  — human-readable, coloured when stderr is a TTY.
+	//                     Best for local dev / `tail -f agent.log`.
+	//   json            — newline-delimited JSON, one record per log
+	//                     line on stderr. Best for log shippers
+	//                     (Loki / Datadog / Vector / Fluent Bit).
+	//   json-pretty     — indented JSON, one record per line. Best for
+	//                     humans who want the structure of json but
+	//                     don't want to read minified output.
+	// The level is always RUST_LOG (env-filter compatible).
+	use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, fmt};
+	let log_format = std::env::var("LOG_FORMAT").unwrap_or_else(|_| "text".to_string());
+	let env_filter = EnvFilter::try_from_default_env()
+		.unwrap_or_else(|_| EnvFilter::new("info"));
 
-    let cfg = Config::load().context("loading config")?;
-    let state_dir = cfg.state_dir();
-    let identity = Arc::new(Identity::load_or_create(&state_dir).context("loading identity")?);
+	let json_layer = fmt::layer()
+		.json()
+		.flatten_event(true)
+		.with_current_span(false)
+		.with_span_list(false)
+		.with_target(true)
+		.with_file(false)
+		.with_line_number(false)
+		.with_writer(std::io::stderr);
 
-    info!(
-        server_id = %cfg.server_id,
-        public_key = %identity.public_key_b64(),
-        api_base = %cfg.api_base,
-        state_dir = ?state_dir,
-        "void-agent starting"
-    );
+	match log_format.as_str() {
+		"json" => {
+			tracing_subscriber::registry().with(env_filter).with(json_layer).init();
+		}
+		"json-pretty" => {
+			tracing_subscriber::registry()
+				.with(env_filter)
+				.with(json_layer.pretty())
+				.init();
+		}
+		_ => {
+			// "text" or anything else — human-readable, stderr.
+			tracing_subscriber::registry()
+				.with(env_filter)
+				.with(fmt::layer().with_writer(std::io::stderr))
+				.init();
+		}
+	}
+
+	let cfg = Config::load().context("loading config")?;
+	let state_dir = cfg.state_dir();
+	let identity = Arc::new(Identity::load_or_create(&state_dir).context("loading identity")?);
+
+	// Make sure the per-deployment log directory exists. Logs are
+	// appended to JSONL files (one per deployment) so they survive a
+	// WebSocket disconnect and can be tailed/inspected offline.
+	// See emit_log() for the write path. We also stash the state
+	// dir in VOID_STATE_DIR so the append_to_jsonl_log() helper
+	// can find it without us having to plumb the PathBuf through
+	// every function.
+	let logs_dir = state_dir.join("logs");
+	if let Err(e) = std::fs::create_dir_all(&logs_dir) {
+		warn!(error = %e, dir = %logs_dir.display(), "could not create logs dir, per-deploy file logs will be skipped");
+	}
+	std::env::set_var("VOID_STATE_DIR", &state_dir);
+
+	info!(
+		server_id = %cfg.server_id,
+		public_key = %identity.public_key_b64(),
+		api_base = %cfg.api_base,
+		state_dir = %state_dir.display(),
+		"void-agent starting"
+	);
 
     let mut backoff_ms = 1_000u64;
     loop {
@@ -768,23 +818,78 @@ async fn drain_serve_logs_to_ws(
 }
 
 async fn emit_log(
-    line_no: &mut u32,
-    deployment_id: &str,
-    ws: &mut WsStream,
-    stream: LogStream,
-    data: String,
+	line_no: &mut u32,
+	deployment_id: &str,
+	ws: &mut WsStream,
+	stream: LogStream,
+	data: String,
 ) {
-    *line_no += 1;
-    let msg = AgentOut::Log {
-        deployment_id: deployment_id.to_string(),
-        stream,
-        data,
-        line: *line_no,
-    };
-    let json = serde_json::to_string(&msg).unwrap();
-    if let Err(e) = ws.send(Message::Text(json)).await {
-        error!(error = %e, "failed to send log line");
-    }
+	*line_no += 1;
+	let msg = AgentOut::Log {
+		deployment_id: deployment_id.to_string(),
+		stream,
+		data: data.clone(),
+		line: *line_no,
+	};
+	let json = serde_json::to_string(&msg).unwrap();
+	if let Err(e) = ws.send(Message::Text(json)).await {
+		error!(error = %e, "failed to send log line");
+	}
+	// Best-effort append to the per-deployment JSONL log file. We
+	// do this AFTER the WS send so a slow disk never delays the
+	// real-time stream. If the file write fails, the WS copy is
+	// still the source of truth.
+	append_to_jsonl_log(deployment_id, stream, *line_no, &data).await;
+}
+
+/// Append a single log line to the per-deployment JSONL file.
+/// The file lives at $state_dir/logs/{deployment_id}.jsonl.
+/// We open the file on every write (cheap for a few writes per
+/// second, and the alternative is keeping an AsyncFile handle in
+/// scope across the whole deploy function, which is a lifetime
+/// nightmare). Writes are best-effort — a failure is logged at
+/// debug level but doesn't break the deploy.
+async fn append_to_jsonl_log(
+	deployment_id: &str,
+	stream: LogStream,
+	line_no: u32,
+	data: &str,
+) {
+	// The path is constructed from VOID_STATE_DIR (resolved at agent
+	// start). We read it from env at call time to keep this fn
+	// self-contained; if it's missing we silently skip the file write.
+	let Some(state_dir) = std::env::var_os("VOID_STATE_DIR") else {
+		return;
+	};
+	let path = std::path::PathBuf::from(state_dir)
+		.join("logs")
+		.join(format!("{}.jsonl", deployment_id));
+	// Build the JSONL record (newline-delimited JSON). Same fields as
+	// the WS frame, plus a top-level timestamp so the file is useful
+	// offline without a separate index.
+	let record = serde_json::json!({
+		"ts": now_ts(),
+		"deployment_id": deployment_id,
+		"line": line_no,
+		"stream": stream,
+		"data": data,
+	});
+	// Strip the trailing \n in `data` if any — JSON encodes the full
+	// line content as a single string, no need to duplicate.
+	let record_str = match serde_json::to_string(&record) {
+		Ok(s) => format!("{}\n", s),
+		Err(_) => return,
+	};
+	// Best-effort append. We don't propagate the error — failing to
+	// write a log file should never break a deploy.
+	if let Ok(mut f) = tokio::fs::OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open(&path)
+		.await
+	{
+		let _ = f.write_all(record_str.as_bytes()).await;
+	}
 }
 
 async fn emit_done(
