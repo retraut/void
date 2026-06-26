@@ -35,42 +35,98 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Vitest
-        id: vitest
-        # `--reporter=default` (vitest 4 dropped `basic`).
-        # `tee` so we can both display in the log AND attach to the
-        # job summary in the next step.
-        run: pnpm vitest run --reporter=default 2>&1 | tee test-results.txt
+        # Run BOTH reporters: the `default` one for the readable
+        # log (tee'd to a file), the `json` one for structured
+        # data (written to vitest-results.json for jq to parse).
+        run: pnpm vitest run --reporter=default --reporter=json --outputFile.json=vitest-results.json 2>&1 | tee vitest-log.txt
       - name: Publish test summary
         if: always()
+        # Strip ANSI escape codes from the readable log, then
+        # render a clean markdown summary. The summary always
+        # shows (even on failure) so you can see what passed
+        # and what broke without scrolling through raw logs.
         run: |
+          # Strip ANSI escape sequences: ESC[...m (colors) and
+          # OSC...ST (terminal titles). Cover both just in case
+          # vitest emits other sequences we don't know about.
+          sed -i -E 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b\][^\x07]*\x07//g' vitest-log.txt
+
           {
             echo "## Vitest summary"
-            echo ""
-            if [ -s test-results.txt ]; then
-              echo "<details><summary>Show full output</summary>"
+
+            if [ -s vitest-results.json ]; then
+              # Pull headline numbers out of the JSON
+              TOTAL=$(jq -r '.numTotalTests // 0' vitest-results.json)
+              PASSED=$(jq -r '.numPassedTests // 0' vitest-results.json)
+              FAILED=$(jq -r '.numFailedTests // 0' vitest-results.json)
+              SUITES=$(jq -r '.numTotalTestSuites // 0' vitest-results.json)
+              SUITES_PASSED=$(jq -r '.numPassedTestSuites // 0' vitest-results.json)
+              SUCCESS=$(jq -r '.success // false' vitest-results.json)
+
+              # Status badge
+              if [ "$FAILED" = "0" ] && [ "$SUCCESS" = "true" ]; then
+                echo ""
+                echo "✅ **All tests passed**"
+              else
+                echo ""
+                echo "❌ **$FAILED test(s) failed**"
+              fi
+
               echo ""
-              echo '```'
-              cat test-results.txt
-              echo '```'
+              echo "| Metric | Value |"
+              echo "|---|---|"
+              echo "| Test files | $SUITES_PASSED / $SUITES passed |"
+              echo "| Tests | $PASSED / $TOTAL passed |"
+              echo "| Failed | $FAILED |"
+
+              # Duration from the JSON (startTime is ms epoch)
+              START=$(jq -r '.startTime // 0' vitest-results.json)
+              if [ "$START" != "0" ]; then
+                # Sum endTime - startTime across all test files
+                DURATION_MS=$(jq -r '
+                  ([.testResults[]? | (.endTime // 0) - (.startTime // 0)] | add) // 0
+                ' vitest-results.json)
+                DURATION_S=$(awk -v ms="$DURATION_MS" 'BEGIN { printf "%.2f", ms / 1000 }')
+                echo "| Wall time | ${DURATION_S}s |"
+              fi
+            else
               echo ""
-              echo "</details>"
-            else
-              echo "_no output captured_"
+              echo "⚠️ vitest-results.json was not produced (vitest crashed before finishing)"
             fi
-            # Pull a few headline numbers out of the log so they
-            # show up at the top of the summary even when the
-            # details block is collapsed.
-            echo "### Headline"
+
+            # Per-file breakdown
+            if [ -s vitest-results.json ]; then
+              echo ""
+              echo "### Per file"
+              echo ""
+              echo "| File | Tests | Passed | Failed | Duration |"
+              echo "|---|---|---|---|---|"
+              jq -r '
+                .testResults[]? |
+                "|\(.name | sub(".*/worker/"; ""))|\(.assertionResults | length)|\([.assertionResults[] | select(.status == "passed")] | length)|\([.assertionResults[] | select(.status == "failed")] | length)|\(((.endTime // 0) - (.startTime // 0)))ms|"
+              ' vitest-results.json
+            fi
+
+            # Full log under a collapsible block
             echo ""
-            if grep -E 'Tests +[0-9]+ (passed|failed)' test-results.txt >/dev/null 2>&1; then
-              grep -E 'Test Files +[0-9]+ (passed|failed)|Tests +[0-9]+ (passed|failed)|Duration' test-results.txt \
-                | sed 's/^[[:space:]]*//' \
-                | head -5 \
-                | awk 'BEGIN{print "| Metric | Value |"; print "|---|---|"} {print "| " $0 " |"}'
-            else
-              echo "_no summary line found_"
-            fi
+            echo "<details>"
+            echo "<summary>Full vitest log</summary>"
+            echo ""
+            echo '```'
+            cat vitest-log.txt
+            echo '```'
+            echo ""
+            echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload results on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vitest-results
+          path: |
+            worker/vitest-log.txt
+            worker/vitest-results.json
+          if-no-files-found: ignore
 
   cloud-init:
     name: Cloud-init smoke test
@@ -94,10 +150,8 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
       - name: Validate user_data (vitest)
-        # `--reporter=default` (vitest 4 dropped `basic`).
-        # `tee` so the output is preserved if a later Docker step
-        # fails — uploaded to artifacts on any failure below.
-        run: pnpm vitest run test/cloud-init.test.ts --reporter=default 2>&1 | tee test-results.txt
+        # JSON output for the summary, default output for the log
+        run: pnpm vitest run test/cloud-init.test.ts --reporter=default --reporter=json --outputFile.json=cloud-init-vitest-results.json 2>&1 | tee cloud-init-vitest-log.txt
       - name: Generate user_data
         run: pnpm exec tsx scripts/extract-cloud-init.mts
       - name: Build & run Docker smoke test
@@ -114,19 +168,43 @@ jobs:
       - name: Publish test summary
         if: always()
         run: |
+          sed -i -E 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b\][^\x07]*\x07//g' cloud-init-vitest-log.txt
+
           {
             echo "## Cloud-init vitest summary"
-            echo ""
-            if [ -s test-results.txt ]; then
-              echo "<details><summary>Show full output</summary>"
+
+            if [ -s cloud-init-vitest-results.json ]; then
+              TOTAL=$(jq -r '.numTotalTests // 0' cloud-init-vitest-results.json)
+              PASSED=$(jq -r '.numPassedTests // 0' cloud-init-vitest-results.json)
+              FAILED=$(jq -r '.numFailedTests // 0' cloud-init-vitest-results.json)
+              SUCCESS=$(jq -r '.success // false' cloud-init-vitest-results.json)
+
+              if [ "$FAILED" = "0" ] && [ "$SUCCESS" = "true" ]; then
+                echo ""
+                echo "✅ **All tests passed**"
+              else
+                echo ""
+                echo "❌ **$FAILED test(s) failed**"
+              fi
+
+              echo ""
+              echo "| Metric | Value |"
+              echo "|---|---|"
+              echo "| Tests | $PASSED / $TOTAL passed |"
+              echo "| Failed | $FAILED |"
+
+              echo ""
+              echo "<details>"
+              echo "<summary>Full vitest log</summary>"
               echo ""
               echo '```'
-              cat test-results.txt
+              cat cloud-init-vitest-log.txt
               echo '```'
               echo ""
               echo "</details>"
             else
-              echo "_no output captured_"
+              echo ""
+              echo "⚠️ cloud-init-vitest-results.json was not produced"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload bootstrap log on failure
@@ -141,5 +219,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cloud-init-vitest-log
-          path: worker/test-results.txt
+          path: |
+            worker/cloud-init-vitest-log.txt
+            worker/cloud-init-vitest-results.json
           if-no-files-found: ignore
