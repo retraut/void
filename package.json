@@ -4,7 +4,6 @@
   "private": true,
   "description": "Best-in-class DX. Hetzner pricing. No SSH. Self-hosted edge-driven PaaS with MCP-native AI deploys.",
   "license": "MIT",
-  "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=20"
   },
