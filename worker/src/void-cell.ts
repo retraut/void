@@ -238,7 +238,7 @@ export class VoidCell {
 					.prepare(
 						`UPDATE servers SET setup_token = NULL, setup_token_consumed_at = ?,
 						                  session_token = ?, session_token_created_at = ?,
-						                  agent_public_key = ? WHERE id = ?`,
+						                  agent_public_key = ?, status = 'active' WHERE id = ?`,
 					)
 					.bind(now, newSessionToken, now, msg.public_key, serverId)
 					.run();
@@ -253,10 +253,13 @@ export class VoidCell {
 					}),
 				);
 			} else {
-				// Reconnect: just update public_key if changed, keep session_token
+				// Reconnect: just update public_key if changed, keep session_token.
+				// Also flip status from 'pending' to 'active' in case the
+				// first register on a manual/test-lab row happened before
+				// the fix that updates status (legacy rows). Idempotent.
 				await this.env.void_db
 					.prepare(
-						"UPDATE servers SET agent_public_key = COALESCE(?, agent_public_key), last_seen_at = ? WHERE id = ?",
+						"UPDATE servers SET agent_public_key = COALESCE(?, agent_public_key), last_seen_at = ?, status = CASE WHEN status = 'pending' THEN 'active' ELSE status END WHERE id = ?",
 					)
 					.bind(msg.public_key, now, serverId)
 					.run();

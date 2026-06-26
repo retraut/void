@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS servers (
 	tunnel_id TEXT,
 	tunnel_name TEXT,
 	tunnel_token_encrypted TEXT,
-	status TEXT CHECK(status IN ('provisioning','active','offline','failed','destroyed')) DEFAULT 'provisioning',
+	status TEXT CHECK(status IN ('pending','provisioning','active','offline','failed','destroyed')) DEFAULT 'pending',
 	created_at INTEGER DEFAULT (unixepoch()),
 	last_seen_at INTEGER
 );

@@ -150,3 +150,38 @@ api_servers() {
 	bearer="$(bearer_resolve)"
 	curl -fsS -H "Authorization: Bearer $bearer" "$LAB_API/api/servers"
 }
+
+# Resolve the host IP that an OrbStack VM should use to reach
+# the wrangler dev. The control plane's /api/servers/register
+# derives api_base from the request URL, which is 127.0.0.1
+# (because that's where wrangler dev is bound locally). But from
+# inside the VM, 127.0.0.1 is the VM itself, not the host.
+#
+# We rewrite the api_base in the registration response to point
+# at the host's OrbStack-bridge IP. Detect by parsing the default
+# route advertised to the VM (the gateway IS the host, since
+# OrbStack NATs).
+host_ip_for_vm() {
+	# Run inside the VM, get the default route's gateway IP.
+	# The first column of `ip route show default` is the IP.
+	orb run -m "$LAB_VM_NAME" ip route show default 2>/dev/null \
+		| awk '{print $3; exit}'
+}
+
+# Rewrite a registration.json in-place to swap the api_base
+# from 127.0.0.1 (where wrangler dev is bound) to the host IP
+# the VM can actually reach.
+rewrite_registration_for_vm() {
+	local host_ip
+	host_ip="$(host_ip_for_vm)"
+	if [ -z "$host_ip" ]; then
+		warn "could not detect host IP from inside the VM; api_base will be 127.0.0.1 (broken)"
+		return 1
+	fi
+	# /api/servers/register returned wss://127.0.0.1:8787 (or
+	# whatever requestUrl was). Swap host to $host_ip, keep port.
+	local new_api_base
+	new_api_base=$(jq -r .api_base "$LAB_REG" | sed -E "s|://[^:/]+|://$host_ip|")
+	jq --arg n "$new_api_base" '.api_base = $n' "$LAB_REG" > "$LAB_REG.tmp" && mv "$LAB_REG.tmp" "$LAB_REG"
+	ok "rewrote api_base → $new_api_base (host IP from VM's perspective)"
+}

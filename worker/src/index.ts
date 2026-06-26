@@ -328,27 +328,32 @@ app.get("/api/servers", async (c) => {
 // it as Authorization: Bearer. The panel uses a server-side fetch
 // with the same token (it has access to env at render time).
 app.post("/api/servers/register", async (c) => {
-	// Resolve the user from the Bearer token. For test-lab this is
-	// the single local "dev" user that the worker creates on first
-	// request. For production panel use, the Bearer token is still
-	// valid (the user has it stored in their session and we can
-	// look them up by it).
+	// Resolve the user from the Bearer token. The token is system-wide
+	// (one per deployment). We attribute the registered server to the
+	// first user in the users table.
 	const auth = c.req.header("authorization") || "";
 	const m = auth.match(/^Bearer\s+(\S+)$/i);
 	const bearer = m?.[1] || "";
 	if (!bearer || bearer !== c.env.VOID_BEARER_TOKEN) {
 		return c.json({ error: "unauthorized", message: "Bearer token required" }, 401);
 	}
-	// The bearer token is system-wide (one per deployment). We
-	// attribute the registered server to the first user in the
-	// users table. In production this is the operator; in
-	// test-lab there's exactly one dev user.
 	const { results } = await c.env.void_db
 		.prepare("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
 		.all<{ id: string }>();
 	const userId = results[0]?.id;
 	if (!userId) {
-		return c.json({ error: "no_users", message: "no users in D1; complete the OAuth login first" }, 412);
+		// No user in the system yet. The test-lab has a provision
+		// script that seeds a 'lab' user; the production panel
+		// has the OAuth flow. Either way, this endpoint requires
+		// a real user to attribute the server to.
+		return c.json(
+			{
+				error: "no_users",
+				message:
+					"no users in D1; run scripts/test-lab/provision.sh (lab) or complete the OAuth login (production) first",
+			},
+			412,
+		);
 	}
 	const body = await c.req.json().catch(() => ({}));
 	const { registerServerForUser } = await import("./server-register");

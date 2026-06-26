@@ -453,9 +453,18 @@ export async function handleMcp(c: any): Promise<Response> {
 					// 6. Send deploy command to the agent via the void-cell DO
 					const cellId = env.void_cell.idFromName(serverId);
 					const cellStub = env.void_cell.get(cellId);
+					// Pass the bearer token so this works in both
+					// (a) real production where cellStub.fetch is a
+					// direct DO call (bearer is ignored) and (b)
+					// wrangler dev local where the call may fall
+					// through to the /cell/:id/* HTTP route, which
+					// requires bearer.
 					const sendResp = await cellStub.fetch("https://cell/send-deploy", {
 						method: "POST",
-						headers: { "content-type": "application/json" },
+						headers: {
+							"content-type": "application/json",
+							authorization: `Bearer ${env.VOID_BEARER_TOKEN}`,
+						},
 						body: JSON.stringify({
 							deployment_id: deploymentId,
 							repo_url: urlCheck.normalized,

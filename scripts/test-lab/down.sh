@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# void test-lab — tear down the local dev environment.
+# void test-lab — tear down the dev environment.
 #
-# Steps:
-#   1. Stop wrangler dev (if up.sh started one).
-#   2. Delete the OrbStack VM.
-#   3. Remove the .test-lab/ scratch dir.
+# Stops wrangler dev. Does NOT touch the OrbStack VM — that's
+# expensive (~2 min to recreate) and the user usually wants to
+# keep it around between dev sessions. To also nuke the VM:
 #
-# Note: we do NOT touch D1. The test-lab server row stays in the
-# database so you can re-attach to it with `up.sh` if you want,
-# or clean it up with the panel "Delete" button. Re-registering
-# creates a new row (different server_id).
+#   scripts/test-lab/agent-vm.sh destroy --purge
+#
+# By default, leaves .test-lab/registration.json on disk so
+# `up.sh` can re-attach to the same row in D1. Pass --full to
+# also delete the scratch dir (next `up.sh` will re-register).
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,29 +18,21 @@ source "$SCRIPT_DIR/lib.sh"
 
 LAB_VM_NAME="${VOID_LAB_VM_NAME:-void-lab}"
 
-section "test-lab: tear down"
+section "test-lab: tear down dev env"
 
-# VM first (so its WS connection drops and the panel marks it offline
-# before we kill wrangler — cleaner logs on the worker side).
-if orb list 2>/dev/null | awk '{print $1}' | grep -qx "$LAB_VM_NAME"; then
-	log "deleting orb VM $LAB_VM_NAME..."
-	orb delete --force "$LAB_VM_NAME" 2>&1 | sed 's/^/  /'
-	ok "VM deleted"
-else
-	log "orb VM $LAB_VM_NAME not present, skipping"
-fi
-
-# wrangler
+# wrangler first (clean process shutdown).
 wrangler_stop
 
-# Scratch dir (config_toml etc.) — keep the registration.json on disk
-# in case you want to inspect it; remove only on --full.
+# Scratch dir
 if [ "${1:-}" = "--full" ]; then
 	rm -rf "$LAB_DIR"
 	ok "removed $LAB_DIR (--full)"
 else
-	log "leaving $LAB_DIR in place (use --full to remove)"
+	log "leaving $LAB_DIR in place (use --full to also remove)"
 fi
 
-printf '%s✓%s test-lab torn down\n' "$C_GREEN" "$C_RESET"
-printf '%sdatabase rows%s were not touched — clean up via the panel or /api/servers.\n' "$C_DIM" "$C_RESET"
+printf '\n%sVM kept:%s %s\n' "$C_DIM" "$LAB_VM_NAME" "$C_RESET"
+printf '%sDelete the VM (when you'\''re done with the lab):%s\n' "$C_DIM" "$C_RESET"
+printf '  scripts/test-lab/agent-vm.sh destroy --purge\n\n'
+
+printf '%sBring the dev env back up:%s scripts/test-lab/up.sh\n' "$C_DIM" "$C_RESET"
