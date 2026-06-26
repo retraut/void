@@ -15,6 +15,16 @@
 import type { Env } from "./env";
 import { encrypt, decrypt, getEncryptionKey } from "./crypto";
 
+export interface SystemKeyMeta {
+	key: string;
+	label: string;
+	description: string;
+	envVar: string;
+	placeholder: string;
+	textarea?: boolean;
+	warning?: string;
+}
+
 /**
  * All system-managed keys. The UI in /settings reads this list to
  * render forms; the worker calls `getSystemToken(env, key)` to read.
@@ -103,19 +113,9 @@ export const SYSTEM_KEYS = [
 		placeholder: "any-random-32+-char-string",
 		warning: "Changing this logs all users out.",
 	},
-] as const;
+];
 
 export type SystemKey = (typeof SYSTEM_KEYS)[number]["key"];
-
-export interface SystemKeyMeta {
-	key: SystemKey;
-	label: string;
-	description: string;
-	envVar: string;
-	placeholder: string;
-	textarea?: boolean;
-	warning?: string;
-}
 
 /**
  * Look up a system token. Tries the D1 panel-set value first, then

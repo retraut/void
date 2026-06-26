@@ -5,7 +5,7 @@
   "description": "Best-in-class DX. Hetzner pricing. No SSH. Self-hosted edge-driven PaaS with MCP-native AI deploys.",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev:worker": "pnpm --filter @void/worker dev",
@@ -17,7 +17,7 @@
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "@types/node": "^20.0.0"
+    "typescript": "^5.9.3",
+    "@types/node": "^22.10.0"
   }
 }

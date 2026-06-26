@@ -91,7 +91,7 @@ jobs:
           fi
 
       - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           # Only the OAuth secrets needed at deploy time. Everything
           # else (Hetzner, Cloudflare API, GitHub App, agent HMAC,

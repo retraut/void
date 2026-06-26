@@ -262,15 +262,15 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 		// Validate inputs (defense in depth — same checks happen in MCP path)
 		const refCheck = validateRef(branch);
 		if (!refCheck.ok) {
-			return jsonResponse({ error: refCheck.reason }, { status: 400 });
+			return jsonResponse({ error: refCheck.reason }, 400);
 		}
 		if (project.build_command) {
 			const c = validateShellCommand(project.build_command, "build_command");
-			if (!c.ok) return jsonResponse({ error: c.reason }, { status: 400 });
+			if (!c.ok) return jsonResponse({ error: c.reason }, 400);
 		}
 		if (project.serve_command) {
 			const c = validateShellCommand(project.serve_command, "serve_command");
-			if (!c.ok) return jsonResponse({ error: c.reason }, { status: 400 });
+			if (!c.ok) return jsonResponse({ error: c.reason }, 400);
 		}
 		const commitSha = push.head_commit?.id;
 		const result = await triggerDeploy(env, {
@@ -308,15 +308,15 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 		// Validate PR ref
 		const refCheck = validateRef(prBranch);
 		if (!refCheck.ok) {
-			return jsonResponse({ error: refCheck.reason }, { status: 400 });
+			return jsonResponse({ error: refCheck.reason }, 400);
 		}
 		if (project.build_command) {
 			const c = validateShellCommand(project.build_command, "build_command");
-			if (!c.ok) return jsonResponse({ error: c.reason }, { status: 400 });
+			if (!c.ok) return jsonResponse({ error: c.reason }, 400);
 		}
 		if (project.serve_command) {
 			const c = validateShellCommand(project.serve_command, "serve_command");
-			if (!c.ok) return jsonResponse({ error: c.reason }, { status: 400 });
+			if (!c.ok) return jsonResponse({ error: c.reason }, 400);
 		}
 		const hostname = `pr-${prNumber}-${project.slug}`;
 		const result = await triggerDeploy(env, {

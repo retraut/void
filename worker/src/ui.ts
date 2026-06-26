@@ -1325,13 +1325,21 @@ ${fullUser
 </div>
 
 <div class="card">
-	<h2 style="margin-top:0">System settings</h2>
-	<p class="meta" style="margin:0 0 16px;font-size:0.85rem;line-height:1.5">
-		Operator-managed tokens. Encrypted at rest with AES-256-GCM.
-		If unset, the worker falls back to environment variables (if any).
-		The deploy workflow only ships <code>GITHUB_CLIENT_ID</code> and
-		<code>GITHUB_CLIENT_SECRET</code> — set everything else here.
-	</p>
+	<details>
+		<summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none">
+			<h2 style="margin:0;display:inline">System settings <span class="pill" style="background:#1a1a1a;color:#888;border:1px solid #333;font-size:0.7rem;vertical-align:middle;margin-left:8px">advanced</span></h2>
+			<span class="meta" style="font-size:0.8rem">${
+				overriddenSystemTokens.size > 0
+					? `${overriddenSystemTokens.size} of ${SYSTEM_KEYS.length} set in panel`
+					: `all ${SYSTEM_KEYS.length} falling back to env`
+			}</span>
+		</summary>
+		<p class="meta" style="margin:16px 0;font-size:0.85rem;line-height:1.5">
+			Operator-managed tokens. Encrypted at rest with AES-256-GCM.
+			If unset, the worker falls back to environment variables (if any).
+			The deploy workflow only ships <code>GITHUB_CLIENT_ID</code> and
+			<code>GITHUB_CLIENT_SECRET</code> — set everything else here.
+		</p>
 	${
 		SYSTEM_KEYS.map((k) => {
 			const isSet = overriddenSystemTokens.has(k.key);
@@ -1370,6 +1378,7 @@ ${fullUser
 			</div>`;
 		}).join("")
 	}
+	</details>
 </div>
 
 <div class="card">
