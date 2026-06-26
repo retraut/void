@@ -99,10 +99,10 @@ CREATE TABLE IF NOT EXISTS passkeys (
 CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id);
 CREATE INDEX IF NOT EXISTS idx_passkeys_credential ON passkeys(credential_id);
 
--- System settings — operator-managed tokens stored in the panel.
+-- System settings - operator-managed tokens stored in the panel.
 -- Encrypted with ENCRYPTION_KEY at rest. Set/cleared via /settings.
 -- Only the OAuth secrets (GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET)
--- are set via GitHub Actions at deploy time; everything else is here.
+-- are set via GitHub Actions at deploy time, everything else is here.
 CREATE TABLE IF NOT EXISTS system_settings (
 	key TEXT PRIMARY KEY,
 	encrypted_value TEXT NOT NULL,
@@ -110,8 +110,7 @@ CREATE TABLE IF NOT EXISTS system_settings (
 );
 `;
 
-// Idempotent column additions (for migrating existing tables created by an older schema).
-// SQLite doesn't support IF NOT EXISTS on ALTER TABLE ADD COLUMN, so we catch the error.
+// SQLite has no IF NOT EXISTS on ALTER TABLE ADD COLUMN, so we catch the error.
 const COLUMN_MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
 	{ table: "servers", column: "tunnel_id", type: "TEXT" },
 	{ table: "servers", column: "tunnel_name", type: "TEXT" },
