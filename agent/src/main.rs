@@ -376,32 +376,38 @@ async fn handle_incoming(
 
 #[derive(Debug)]
 struct DeployParams {
-    deployment_id: String,
-    repo_url: String,
-    ref_: String,
-    build_command: Option<String>,
-    serve_command: Option<String>,
-    port: Option<u16>,
-    hostname: Option<String>,
-    public_url: Option<String>,
-    tunnel_token: Option<String>,
-    tunnel_id: Option<String>,
-    build_dir: PathBuf,
+	deployment_id: String,
+	repo_url: String,
+	ref_: String,
+	build_command: Option<String>,
+	serve_command: Option<String>,
+	port: Option<u16>,
+	hostname: Option<String>,
+	public_url: Option<String>,
+	tunnel_token: Option<String>,
+	// tunnel_id is accepted from the worker for protocol completeness
+	// (the worker always sends it alongside tunnel_token) but isn't
+	// used by the agent — we resolve the tunnel by token via
+	// `cloudflared tunnel run`. Keep the field so the canonical-JSON
+	// HMAC payload signature on the worker side still matches.
+	#[allow(dead_code)]
+	tunnel_id: Option<String>,
+	build_dir: PathBuf,
 }
 
 async fn run_deploy(
-    deployment_id: String,
-    repo_url: String,
-    ref_: String,
-    build_command: Option<String>,
-    serve_command: Option<String>,
-    port: Option<u16>,
-    hostname: Option<String>,
-    public_url: Option<String>,
-    tunnel_token: Option<String>,
-    tunnel_id: Option<String>,
-    cfg: Config,
-    ws: &mut WsStream,
+	deployment_id: String,
+	repo_url: String,
+	ref_: String,
+	build_command: Option<String>,
+	serve_command: Option<String>,
+	port: Option<u16>,
+	hostname: Option<String>,
+	public_url: Option<String>,
+	tunnel_token: Option<String>,
+	tunnel_id: Option<String>,
+	cfg: Config,
+	ws: &mut WsStream,
 ) {
     let mut line_no = 0u32;
 

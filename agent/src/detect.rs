@@ -15,17 +15,6 @@ pub struct Detected {
     pub port: u16,
 }
 
-impl Detected {
-    pub fn empty() -> Self {
-        Self {
-            framework: "unknown".into(),
-            build_command: None,
-            serve_command: None,
-            port: 3000,
-        }
-    }
-}
-
 /// Detect project type from a cloned directory. Returns a Detected struct
 /// with framework, optional build/serve commands, and port. Conservative —
 /// only returns commands when confident.

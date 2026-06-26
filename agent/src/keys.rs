@@ -1,13 +1,22 @@
 //! Ed25519 keypair management.
 //!
-//! Generates a new keypair on first run, persists to disk, signs WS frames.
+//! Generates a new keypair on first run, persists to disk, exposes
+//! the verifying (public) key. The signing side is currently unused —
+//! deploy-frame authentication uses HMAC-SHA256 with a shared secret
+//! (see `verify_hmac_sha256` in main.rs) — but the Ed25519 identity
+//! is kept for future use (signed WS frames, signed deploy
+//! requests from the worker, etc.). The private key is stored with
+//! 0o600 perms on Unix.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::RngCore;
 use std::path::Path;
 
 pub struct Identity {
+    /// Kept for future use (signed WS frames, signed deploy requests).
+    /// The compiler would otherwise warn it's never read.
+    #[allow(dead_code)]
     pub signing: SigningKey,
     pub verifying: VerifyingKey,
 }
@@ -50,10 +59,5 @@ impl Identity {
 
     pub fn public_key_b64(&self) -> String {
         B64.encode(self.verifying.to_bytes())
-    }
-
-    pub fn sign(&self, msg: &[u8]) -> String {
-        let sig = self.signing.sign(msg);
-        B64.encode(sig.to_bytes())
     }
 }

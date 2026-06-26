@@ -20,13 +20,6 @@ pub struct Config {
     /// Path to persistent state (Ed25519 keypair). Defaults to /var/lib/void.
     pub state_dir: Option<String>,
 
-    /// Public server name (for logs)
-    pub name: Option<String>,
-
-    /// Optional: command to run on deploy instead of the default echo/test.
-    /// For MVP we just run a synthetic build to verify the protocol.
-    pub test_command: Option<String>,
-
     /// Template for the public URL of a deployed app.
     /// Use {port} as placeholder for the local port.
     /// Example: "https://pr-{port}.void.example.com" or "https://{port}.loca.lt"
@@ -59,8 +52,6 @@ impl Config {
             });
         let setup_token = std::env::var("VOID_SETUP_TOKEN")
             .unwrap_or_else(|_| "dev-setup-token".to_string());
-        let name = std::env::var("VOID_SERVER_NAME").ok();
-        let test_command = std::env::var("VOID_TEST_COMMAND").ok();
         let public_url_template = std::env::var("VOID_PUBLIC_URL_TEMPLATE")
             .unwrap_or_else(|_| "https://pr-{port}.void.example.com".to_string());
         let agent_shared_secret = std::env::var("VOID_AGENT_SHARED_SECRET").ok();
@@ -72,8 +63,6 @@ impl Config {
             server_id,
             setup_token,
             state_dir: None,
-            name,
-            test_command,
             public_url_template,
             agent_shared_secret,
             cloudflared_pid_file: Some(cloudflared_pid_file),
