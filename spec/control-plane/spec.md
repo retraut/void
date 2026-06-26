@@ -59,11 +59,48 @@ The control plane SHALL maintain persistent WebSocket connections to agents runn
 - **THEN** the system marks the agent as offline
 - **AND** requeues any in-flight deployments
 
-### Requirement: Secrets Management
-The control plane SHALL store and manage encrypted secrets (API keys, database URLs) per environment.
+### Requirement: Generic Server Registration
+The control plane SHALL provide a provider-agnostic registration endpoint that creates a server record with a one-time setup token. All providers (Hetzner, Scaleway, DigitalOcean, manual) use the same endpoint — the provider-specific part is only about how the VM gets provisioned with the agent.
 
-#### Scenario: Store a secret
-- **GIVEN** a project with an environment
-- **WHEN** a user submits a key-value secret
-- **THEN** the system encrypts and stores it in D1
-- **AND** the secret is available during builds
+#### Scenario: Register a server (generic)
+- **GIVEN** a user requesting to add a server
+- **WHEN** they call `POST /api/servers/register`
+- **THEN** the system generates `server_id` (srv_xxx) and `setup_token` (set_xxx)
+- **AND** inserts a row in D1 with status `pending`
+- **AND** returns `{ server_id, setup_token, api_base, config_toml }`
+
+#### Scenario: Hetzner provisions via cloud-init
+- **GIVEN** a D1 server record with `setup_token`
+- **WHEN** the Hetzner provider script is invoked
+- **THEN** it builds cloud-init containing the `server_id` and `setup_token`
+- **AND** calls the Hetzner API to create a VM
+- **AND** the agent on the VM auto-registers via WebSocket
+
+#### Scenario: Manual provisioning (OrbStack, any Linux)
+- **GIVEN** a D1 server record with `setup_token`
+- **WHEN** a user provisions a VM manually
+- **THEN** they write the config (including `setup_token`) to `/etc/void/config.toml`
+- **AND** start the agent — it connects and registers via WebSocket
+
+#### Scenario: Provider scripts are decoupled
+- **GIVEN** the `POST /api/servers/register` endpoint
+- **WHEN** a new provider (Scaleway, DO, etc.) needs to be added
+- **THEN** only a new provider script is written (calls register + creates VM)
+- **AND** no control plane changes are needed — the registration flow is identical
+
+### Requirement: Test Lab Environment
+The control plane SHALL support a fully local development environment for testing agent scenarios without external infrastructure.
+
+#### Scenario: Local dev with OrbStack
+- **GIVEN** a developer machine with OrbStack and Docker
+- **WHEN** `wrangler dev` is running locally
+- **THEN** an OrbStack VM (ubuntu:noble) connects to the local control plane
+- **AND** registers via the generic endpoint
+- **AND** receives `deploy` commands, executes them, reports back
+- **AND** all state is in local D1 (SQLite), no external dependencies
+
+#### Scenario: Cleanup
+- **GIVEN** a test lab VM
+- **WHEN** the test session ends
+- **THEN** the VM is destroyed via `orb delete`
+- **AND** the D1 row is cleaned up or marked as destroyed

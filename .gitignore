@@ -50,3 +50,6 @@ temp/
 *.pem
 *.key
 secrets/
+
+# Test-lab scratch dir (wrangler dev PID, registration.json, cloud-init)
+.test-lab/

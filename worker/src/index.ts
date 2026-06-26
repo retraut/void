@@ -307,6 +307,64 @@ app.get("/api/servers", async (c) => {
 	return c.json({ servers: results });
 });
 
+// POST /api/servers/register — provider-agnostic registration.
+//
+// Returns a one-time setup_token and the agent config.toml the caller
+// should write to /etc/void/config.toml on the target VM. After the
+// agent WS-connects and sends register{setup_token}, the row is
+// promoted to status='active' and the token is replaced with a
+// session_token.
+//
+// This is the path the test-lab scripts use, and the path the panel
+// "register manually" button will use. The Hetzner one-click flow
+// uses a different code path (see server-create.ts) which calls the
+// Hetzner API and embeds the setup_token in cloud-init — that path
+// keeps working unchanged.
+//
+// Both paths share the same D1 row shape and the same WS handshake.
+//
+// Auth: Bearer token (consistent with the rest of /api/*). The
+// test-lab script reads VOID_BEARER_TOKEN from .dev.vars and sends
+// it as Authorization: Bearer. The panel uses a server-side fetch
+// with the same token (it has access to env at render time).
+app.post("/api/servers/register", async (c) => {
+	// Resolve the user from the Bearer token. For test-lab this is
+	// the single local "dev" user that the worker creates on first
+	// request. For production panel use, the Bearer token is still
+	// valid (the user has it stored in their session and we can
+	// look them up by it).
+	const auth = c.req.header("authorization") || "";
+	const m = auth.match(/^Bearer\s+(\S+)$/i);
+	const bearer = m?.[1] || "";
+	if (!bearer || bearer !== c.env.VOID_BEARER_TOKEN) {
+		return c.json({ error: "unauthorized", message: "Bearer token required" }, 401);
+	}
+	// The bearer token is system-wide (one per deployment). We
+	// attribute the registered server to the first user in the
+	// users table. In production this is the operator; in
+	// test-lab there's exactly one dev user.
+	const { results } = await c.env.void_db
+		.prepare("SELECT id FROM users ORDER BY created_at ASC LIMIT 1")
+		.all<{ id: string }>();
+	const userId = results[0]?.id;
+	if (!userId) {
+		return c.json({ error: "no_users", message: "no users in D1; complete the OAuth login first" }, 412);
+	}
+	const body = await c.req.json().catch(() => ({}));
+	const { registerServerForUser } = await import("./server-register");
+	const result = await registerServerForUser(
+		c.env,
+		userId,
+		{
+			name: body?.name,
+			region: body?.region,
+			size: body?.size,
+		},
+		c.req.url,
+	);
+	return c.json(result);
+});
+
 // JSON variant for the /servers page auto-poll. Same shape as the cards.
 // Requires session (cookie) — used by the in-page JS, no Bearer needed.
 app.get("/api/servers-ui", requireSession, async (c) => {
