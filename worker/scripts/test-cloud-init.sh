@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "▶ Validating user_data structure (vitest)..."
-pnpm vitest run test/cloud-init.test.ts --reporter=basic
+pnpm vitest run test/cloud-init.test.ts --reporter=default
 
 echo ""
 echo "▶ Extracting user_data via tsx..."
