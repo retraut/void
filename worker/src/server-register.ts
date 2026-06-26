@@ -84,9 +84,12 @@ export async function registerServerForUser(
 		server_id: serverId,
 		setup_token: setupToken,
 		state_dir: "/var/lib/void",
-		// Default to the dev-friendly local.lt tunnel; the user can
-		// override in /etc/void/config.toml after first register.
-		public_url_template: "https://pr-{port}.loca.lt",
+		// No public_url_template default — the test-lab runs in a VM
+		// that doesn't have a public URL unless the user sets up
+		// cloudflared, ngrok, etc. and sets this. The Hetzner path
+		// uses its own template (in buildCloudInit) since real VMs
+		// get a tunnel_token with each deploy.
+		public_url_template: "",
 	});
 
 	return {
