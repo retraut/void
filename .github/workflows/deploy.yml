@@ -1,0 +1,97 @@
+name: deploy
+
+# Auto-deploy to https://void.retraut.workers.dev on push to main.
+# Manual dispatch also available for re-deploying without a new commit.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time. Never cancel an in-flight deploy — the
+# previous version is still live and serving traffic; cancelling
+# could leave the worker in a half-deployed state.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read  # checkout
+
+jobs:
+  deploy-worker:
+    name: Deploy worker to Cloudflare
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          # API token with "Edit Cloudflare Workers" template scope.
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # account_id is already in wrangler.jsonc; the action reads
+          # it from there, no need to duplicate.
+          workingDirectory: worker
+          command: deploy
+          # All secrets. wrangler-action runs `wrangler secret put`
+          # for each line in the block before `wrangler deploy`, so
+          # the deploy picks up the freshest values from GitHub.
+          #
+          # The list mirrors worker/src/env.ts — every field is
+          # required for the worker to function. If you add a new
+          # secret to the worker, add it here too.
+          secrets: |
+            GITHUB_CLIENT_ID
+            ${{ secrets.GITHUB_CLIENT_ID }}
+            GITHUB_CLIENT_SECRET
+            ${{ secrets.GITHUB_CLIENT_SECRET }}
+            COOKIE_SECRET
+            ${{ secrets.COOKIE_SECRET }}
+            ENCRYPTION_KEY
+            ${{ secrets.ENCRYPTION_KEY }}
+            VOID_BEARER_TOKEN
+            ${{ secrets.VOID_BEARER_TOKEN }}
+            HETZNER_TOKEN
+            ${{ secrets.HETZNER_TOKEN }}
+            CF_API_TOKEN
+            ${{ secrets.CF_API_TOKEN }}
+            CF_ACCOUNT_ID
+            ${{ secrets.CF_ACCOUNT_ID }}
+            CF_ZONE_ID
+            ${{ secrets.CF_ZONE_ID }}
+            GITHUB_WEBHOOK_SECRET
+            ${{ secrets.GITHUB_WEBHOOK_SECRET }}
+            GITHUB_APP_ID
+            ${{ secrets.GITHUB_APP_ID }}
+            GITHUB_APP_PRIVATE_KEY
+            ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+            AGENT_SHARED_SECRET
+            ${{ secrets.AGENT_SHARED_SECRET }}
+            VOID_AGENT_RELEASE_TAG
+            ${{ secrets.VOID_AGENT_RELEASE_TAG }}
+
+      - name: Smoke-test the live URL
+        # After deploy, hit the public endpoint to confirm it's
+        # actually serving. /health is unauth'd and returns 200.
+        run: |
+          sleep 5
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" https://void.retraut.workers.dev/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "✕ /health returned $STATUS, expected 200"
+            exit 1
+          fi
+          echo "✓ /health returned 200"
+          curl -sS https://void.retraut.workers.dev/health
