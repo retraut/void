@@ -396,16 +396,23 @@ export function renderLandingHtml(opts: {
 	installed: boolean;
 	cf_tunnel: boolean;
 	github_webhook: boolean;
+	devAuth: boolean; // true when VOID_DEV_AUTH is enabled (test-lab only)
 }): string {
 	const featureList = [
 		{ name: "GitHub OAuth", on: opts.installed, missing: "GITHUB_CLIENT_ID/SECRET" },
 		{ name: "GitHub webhook", on: opts.github_webhook, missing: "GITHUB_WEBHOOK_SECRET" },
 		{ name: "Cloudflare tunnel", on: opts.cf_tunnel, missing: "CF_API_TOKEN/ACCOUNT/ZONE" },
 		{ name: "Hetzner provisioning", on: !!opts.installed, missing: "HETZNER_TOKEN" },
-	].map(
-		(f) =>
-			`<li><span class="dot ${f.on ? "on" : "off"}"></span>${f.name} <code>${escapeHtml(f.missing)}</code></li>`,
-	).join("");
+	];
+	if (opts.devAuth) {
+		featureList.push({ name: "Dev auth (local-only)", on: true, missing: "VOID_DEV_AUTH=1" });
+	}
+	const featuresHtml = featureList
+		.map(
+			(f) =>
+				`<li><span class="dot ${f.on ? "on" : "off"}"></span>${f.name} <code>${escapeHtml(f.missing)}</code></li>`,
+		)
+		.join("");
 
 	// Banner shown when GitHub OAuth is not properly configured (placeholder values)
 	// or when a real value is set. Tells the user exactly what to do.
@@ -633,6 +640,19 @@ export function renderLandingHtml(opts: {
         </svg>
         Continue with passkeys
       </button>
+      ${
+				opts.devAuth
+					? `<form method="POST" action="/api/auth/dev-login" style="margin-top:8px">
+						   <input type="hidden" name="returnTo" value="/dashboard">
+						   <button type="submit" class="btn btn-secondary" style="width:100%;background:rgba(255,153,0,0.12);border:1px solid rgba(255,153,0,0.4);color:#f90">
+						     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" width="18" height="18" style="vertical-align:-3px;margin-right:6px" aria-hidden="true">
+						       <path d="M14 7h-4v10h4M9 17l-3-3 3-3M15 17l3-3-3-3"/>
+						     </svg>
+						     Continue as <strong>lab</strong> (test-lab, no GitHub)
+						   </button>
+						 </form>`
+					: ""
+			}
     `}
   </div>
   <small id="passkey-status" style="display:block;margin:-16px 0 32px;font-size:0.85rem;min-height:1.2em;color:#888"></small>
@@ -643,7 +663,7 @@ export function renderLandingHtml(opts: {
 
   <div class="features">
     <h3>Configuration status</h3>
-    <ul>${featureList}</ul>
+    <ul>${featuresHtml}</ul>
   </div>
 
   <div class="endpoints">

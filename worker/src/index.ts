@@ -210,6 +210,7 @@ app.get("/", async (c) => {
 		installed: isConfigured(env.GITHUB_CLIENT_ID) && isConfigured(env.GITHUB_CLIENT_SECRET),
 		cf_tunnel: isConfigured(env.CF_API_TOKEN),
 		github_webhook: isConfigured(env.GITHUB_WEBHOOK_SECRET),
+		devAuth: env.VOID_DEV_AUTH === "1" || env.VOID_DEV_AUTH === "true",
 	});
 	return c.html(html);
 });
@@ -287,6 +288,50 @@ app.get("/api/auth/github", (c) => handleAuthStart(c));
 app.get("/api/auth/callback", (c) => handleAuthCallback(c));
 app.get("/api/auth/me", (c) => handleAuthMe(c));
 app.get("/api/auth/logout", (c) => handleAuthLogout(c));
+
+// Dev-only auth bypass for the test-lab. Enabled by setting
+// VOID_DEV_AUTH=1 (or "true") in .dev.vars. NEVER set in production —
+// it lets anyone who can reach the worker log in as any user.
+//
+// POST /api/auth/dev-login
+//   body: { username?: string }   // defaults to "lab"
+//   → sets a __Host-void_session cookie, redirects to /dashboard
+app.post("/api/auth/dev-login", async (c) => {
+	if (c.env.VOID_DEV_AUTH !== "1" && c.env.VOID_DEV_AUTH !== "true") {
+		return c.json(
+			{
+				error: "dev_auth_disabled",
+				message:
+					"VOID_DEV_AUTH is not enabled. Set VOID_DEV_AUTH=1 in worker/.dev.vars to use the local test-lab auth bypass.",
+			},
+			404,
+		);
+	}
+	const body = await c.req.json().catch(() => ({}));
+	const username = String(body?.username || "lab").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+	if (!username) {
+		return c.json({ error: "invalid_username" }, 400);
+	}
+	// Idempotent: upsert the user. github_id is synthetic (starts
+	// with "dev_") so it can never collide with a real GitHub
+	// user's id.
+	const userId = `usr_dev_${username}`;
+	const now = Math.floor(Date.now() / 1000);
+	await c.env.void_db
+		.prepare(
+			`INSERT INTO users (id, github_id, username, avatar_url, onboarding_completed_at, created_at)
+			 VALUES (?, ?, ?, NULL, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			   username = excluded.username,
+			   onboarding_completed_at = COALESCE(users.onboarding_completed_at, excluded.onboarding_completed_at)`,
+		)
+		.bind(userId, `dev_${username}`, username, now, now)
+		.run();
+	const { createSession } = await import("./auth");
+	await createSession(c, { id: userId, username, avatar_url: null });
+	const returnTo = body?.returnTo || "/dashboard";
+	return c.redirect(returnTo);
+});
 
 // ============================================================
 // Webhooks (HMAC, NOT bearer)

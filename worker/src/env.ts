@@ -14,6 +14,13 @@ export interface Env {
 	VOID_BEARER_TOKEN?: string; // required on /api/* and /mcp
 	GITHUB_CLIENT_ID?: string;
 	GITHUB_CLIENT_SECRET?: string;
+
+	// Local-dev only. When set to "1" (or "true"), exposes a
+	// /api/auth/dev-login route that creates a session without
+	// going through GitHub OAuth — useful for the test-lab where
+	// you don't have a real domain to register as the OAuth
+	// callback. NEVER set in production.
+	VOID_DEV_AUTH?: string;
 	CF_API_TOKEN?: string;
 	CF_ACCOUNT_ID?: string;
 	CF_ZONE_ID?: string;

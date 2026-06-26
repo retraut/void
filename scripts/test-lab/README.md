@@ -56,6 +56,18 @@ The Bearer token used by the test-lab scripts is read from
 `worker/.dev.vars` (look for `VOID_BEARER_TOKEN`). Set it there
 once and the scripts pick it up automatically.
 
+For the panel UI (logging in without GitHub OAuth), also set:
+
+```
+VOID_DEV_AUTH = "1"
+```
+
+This exposes a "Continue as lab (test-lab, no GitHub)" button on
+the landing page. The dev-login route (`POST /api/auth/dev-login`)
+is a `404` by default — only enabled when this env is set. NEVER
+set it in production: it lets anyone reach the worker log in as
+any user.
+
 ## First-time setup
 
 ```bash
