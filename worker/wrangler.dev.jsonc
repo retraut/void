@@ -1,0 +1,79 @@
+/**
+ * Local-dev wrangler config. Used by `pnpm dev` (i.e.
+ * wrangler dev --config wrangler.dev.jsonc).
+ *
+ * Identical to wrangler.jsonc EXCEPT:
+ *   - main: src/dev-entry.ts (instead of src/index.ts) — the dev
+ *     entry re-exports the production app and adds dev-only routes
+ *     (auth bypass, future /api/dev/reset, etc).
+ *
+ * Crucially, src/index.ts does NOT import any file under
+ * src/auth-dev.ts or src/dev-entry.ts. The dev module is therefore
+ * physically absent from the production bundle — the wrangler
+ * production build (using wrangler.jsonc with main = src/index.ts)
+ * cannot reach the dev code through the import graph.
+ *
+ * To verify: `pnpm deploy` (or `wrangler deploy`) bundles from
+ * src/index.ts. The dev code is unreachable from that graph and
+ * esbuild drops it. Try `pnpm dev:prod` to run the production
+ * entry point locally without the dev routes.
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"account_id": "949f5e6ec25888632adcebde03276d07",
+	"name": "void",
+	"main": "src/dev-entry.ts",
+	"compatibility_date": "2026-06-24",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"global_fetch_strictly_public"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+
+	"d1_databases": [
+		{
+			"binding": "void_db",
+			"database_name": "void-db",
+			"database_id": "cc139431-0ef9-4e39-9b82-fa4ad8912921"
+		}
+	],
+
+	"kv_namespaces": [
+		{
+			"binding": "ROUTES",
+			"id": "3d68b2f3d7c64495bd47c15683ea5e4f"
+		}
+	],
+
+	"r2_buckets": [
+		{
+			"binding": "void_builds",
+			"bucket_name": "void-builds"
+		}
+	],
+
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "void_cell",
+				"class_name": "VoidCell"
+			}
+		]
+	},
+
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["VoidCell"]
+		}
+	],
+
+	"vars": {
+		"GITHUB_WEBHOOK_SECRET": "REPLACE_WITH_REAL_SECRET_VIA_WRANGLER_SECRET_PUT",
+		"VOID_BEARER_TOKEN": "REPLACE_WITH_RANDOM_64_CHAR_TOKEN",
+		"AGENT_SHARED_SECRET": "REPLACE_WITH_RANDOM_64_CHAR_TOKEN"
+	}
+}

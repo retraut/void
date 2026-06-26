@@ -68,6 +68,14 @@ is a `404` by default — only enabled when this env is set. NEVER
 set it in production: it lets anyone reach the worker log in as
 any user.
 
+The dev-login code lives in `worker/src/auth-dev.ts` and is wired
+in only by the dev entry point (`worker/src/dev-entry.ts`, used
+by `wrangler.dev.jsonc`). Production uses `src/index.ts` directly
+via `wrangler.jsonc` — the dev module is never reachable from the
+production import graph, so it is physically absent from the
+deployed worker bundle. `pnpm dev` uses the dev config;
+`pnpm dev:prod` uses the production entry point locally.
+
 ## First-time setup
 
 ```bash

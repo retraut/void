@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev",
-    "start": "wrangler dev",
+    "dev": "wrangler dev --config wrangler.dev.jsonc",
+    "dev:prod": "wrangler dev --config wrangler.jsonc",
+    "start": "wrangler dev --config wrangler.dev.jsonc",
     "test": "vitest",
     "test:cloud-init": "bash scripts/test-cloud-init.sh",
     "cf-typegen": "wrangler types"

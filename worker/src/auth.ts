@@ -397,6 +397,12 @@ export function renderLandingHtml(opts: {
 	cf_tunnel: boolean;
 	github_webhook: boolean;
 	devAuth: boolean; // true when VOID_DEV_AUTH is enabled (test-lab only)
+	// The dev-login button itself lives in src/auth-dev.ts and is
+	// injected by dev-entry middleware via a marker. We just emit
+	// the marker in production HTML so nothing dev-related is in
+	// the production bundle's response body.
+	// (The marker is a static string defined here — see DEV_AUTH_BUTTON_MARKER.)
+	devAuthButtonMarker?: string;
 }): string {
 	const featureList = [
 		{ name: "GitHub OAuth", on: opts.installed, missing: "GITHUB_CLIENT_ID/SECRET" },
@@ -413,6 +419,12 @@ export function renderLandingHtml(opts: {
 				`<li><span class="dot ${f.on ? "on" : "off"}"></span>${f.name} <code>${escapeHtml(f.missing)}</code></li>`,
 		)
 		.join("");
+
+	// Marker comment for the dev-login button. The dev-entry
+	// middleware replaces this with the actual button HTML.
+	// The marker is a static string so it appears in both
+	// production and dev bundles; only dev-entry replaces it.
+	const devAuthButtonMarker = opts.devAuthButtonMarker ?? "";
 
 	// Banner shown when GitHub OAuth is not properly configured (placeholder values)
 	// or when a real value is set. Tells the user exactly what to do.
@@ -640,19 +652,7 @@ export function renderLandingHtml(opts: {
         </svg>
         Continue with passkeys
       </button>
-      ${
-				opts.devAuth
-					? `<form method="POST" action="/api/auth/dev-login" style="margin-top:8px">
-						   <input type="hidden" name="returnTo" value="/dashboard">
-						   <button type="submit" class="btn btn-secondary" style="width:100%;background:rgba(255,153,0,0.12);border:1px solid rgba(255,153,0,0.4);color:#f90">
-						     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" width="18" height="18" style="vertical-align:-3px;margin-right:6px" aria-hidden="true">
-						       <path d="M14 7h-4v10h4M9 17l-3-3 3-3M15 17l3-3-3-3"/>
-						     </svg>
-						     Continue as <strong>lab</strong> (test-lab, no GitHub)
-						   </button>
-						 </form>`
-					: ""
-			}
+      ${opts.devAuthButtonMarker ?? ""}
     `}
   </div>
   <small id="passkey-status" style="display:block;margin:-16px 0 32px;font-size:0.85rem;min-height:1.2em;color:#888"></small>
