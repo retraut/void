@@ -504,6 +504,44 @@ app.post("/settings/hetzner/delete", requireSession, async (c) => {
 	return c.redirect("/settings?toast=success&msg=Hetzner+token+deleted");
 });
 
+// System settings — operator-managed tokens stored in the panel.
+// Only GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are set via the
+// deploy workflow (see .github/workflows/deploy.yml). Everything else
+// is configured here post-deploy. See worker/src/system-settings.ts
+// for the full list of keys and the env-var fallback chain.
+app.post("/settings/system/:key", requireSession, async (c) => {
+	const { setSystemToken, SYSTEM_KEYS } = await import("./system-settings");
+	const key = c.req.param("key");
+	const meta = SYSTEM_KEYS.find((k) => k.key === key);
+	if (!meta) return c.redirect("/settings?toast=error&msg=unknown+system+key:+${encodeURIComponent(key)}");
+	const form = await c.req.parseBody();
+	const value = String((form as Record<string, string>)["value"] || "").trim();
+	if (!value) {
+		return c.redirect(`/settings?toast=error&msg=${encodeURIComponent(`${meta.label}: value cannot be empty (use Clear to remove)`)}`);
+	}
+	try {
+		await setSystemToken(c.env, meta.key, value);
+		return c.redirect(
+			`/settings?toast=success&msg=${encodeURIComponent(`${meta.label} saved`)}`,
+		);
+	} catch (e: any) {
+		return c.redirect(
+			`/settings?toast=error&msg=${encodeURIComponent(e?.message || String(e))}`,
+		);
+	}
+});
+
+app.post("/settings/system/:key/delete", requireSession, async (c) => {
+	const { deleteSystemToken, SYSTEM_KEYS } = await import("./system-settings");
+	const key = c.req.param("key");
+	const meta = SYSTEM_KEYS.find((k) => k.key === key);
+	if (!meta) return c.redirect("/settings?toast=error&msg=unknown+system+key:+${encodeURIComponent(key)}");
+	await deleteSystemToken(c.env, meta.key);
+	return c.redirect(
+		`/settings?toast=success&msg=${encodeURIComponent(`${meta.label} cleared (falling back to env)`)}`,
+	);
+});
+
 // UI form action: rotate session token (POST from the rotate button)
 app.post("/servers/:id/rotate-session", requireSession, async (c) => {
 	const serverId = c.req.param("id");

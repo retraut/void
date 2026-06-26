@@ -54,11 +54,15 @@ export async function createServerForUser(
 	const serverId = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 	const now = Math.floor(Date.now() / 1000);
 
-	// Resolve the token: per-user → env
+	// Resolve the token: per-user → system (panel) → env
 	let hetznerToken: string | null = null;
 	if (userId) hetznerToken = await getProviderToken(env, userId, "hetzner");
+	if (!hetznerToken) {
+		const { getSystemToken } = await import("./system-settings");
+		hetznerToken = await getSystemToken(env, "hetzner_token");
+	}
 
-	// Stub mode: no token at all (env or per-user)
+	// Stub mode: no token at all (env, system, or per-user)
 	if (!hetznerToken) {
 		await env.void_db
 			.prepare(
@@ -75,8 +79,8 @@ export async function createServerForUser(
 			image: input.image,
 			status: "provisioning",
 			note: env.HETZNER_TOKEN
-				? "Stub mode — this user has no Hetzner token configured."
-				: "HETZNER_TOKEN not configured. Set it via 'wrangler secret put HETZNER_TOKEN' (server-wide) or add a per-user token in /settings.",
+				? "Stub mode — no Hetzner token found for this user. Add one in /settings → Cloud providers, or set a system default in /settings → System settings."
+				: "No Hetzner token configured. Set one in /settings → Cloud providers (per-user) or /settings → System settings (system default).",
 		};
 	}
 

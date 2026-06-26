@@ -1158,6 +1158,11 @@ export async function renderSettingsPage(
 	const { listPasskeys } = await import("./passkey");
 	const passkeys = user ? await listPasskeys(env, user.id) : [];
 
+	// System settings — list of keys currently overridden in D1
+	// (so we can show "Set" vs "Falling back to env" in the UI).
+	const { listOverriddenSystemTokens, SYSTEM_KEYS } = await import("./system-settings");
+	const overriddenSystemTokens = user ? await listOverriddenSystemTokens(env) : new Set();
+
 	const body = `
 ${toast}
 <h1>Settings</h1>
@@ -1316,6 +1321,55 @@ ${fullUser
 		<button type="submit" id="passkey-add-btn" class="btn btn-primary" style="padding:8px 14px">+ Add passkey</button>
 	</form>
 	<small id="passkey-msg" style="display:block;margin-top:8px;font-size:0.85rem;min-height:1.2em"></small>
+</div>
+</div>
+
+<div class="card">
+	<h2 style="margin-top:0">System settings</h2>
+	<p class="meta" style="margin:0 0 16px;font-size:0.85rem;line-height:1.5">
+		Operator-managed tokens. Encrypted at rest with AES-256-GCM.
+		If unset, the worker falls back to environment variables (if any).
+		The deploy workflow only ships <code>GITHUB_CLIENT_ID</code> and
+		<code>GITHUB_CLIENT_SECRET</code> — set everything else here.
+	</p>
+	${
+		SYSTEM_KEYS.map((k) => {
+			const isSet = overriddenSystemTokens.has(k.key);
+			return `<div class="settings-row" style="align-items:flex-start;padding:18px 0">
+				<div class="label" style="flex:1;padding-right:20px">
+					<strong>${escape(k.label)}</strong>
+					<small>${escape(k.description)}</small>
+					${
+						k.warning
+							? `<small style="color:#f90;display:flex;align-items:center;gap:4px;margin-top:4px">⚠ ${escape(k.warning)}</small>`
+							: ""
+					}
+					<div style="margin-top:6px">
+						${
+							isSet
+								? `<span class="pill" style="background:rgba(0,255,136,0.12);color:#0f8;border:1px solid rgba(0,255,136,0.25);font-size:0.72rem">✓ Set in panel</span>`
+								: `<span class="pill" style="background:#1a1a1a;color:#888;border:1px solid #222;font-size:0.72rem">Falling back to env</span>`
+						}
+					</div>
+				</div>
+				<div class="value" style="flex:1;min-width:300px">
+					<form method="POST" action="/settings/system/${escape(k.key)}" style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap">
+						${
+							k.textarea
+								? `<textarea name="value" placeholder="${escape(k.placeholder)}" rows="6" autocomplete="off" spellcheck="false" style="flex:1;min-width:280px;padding:8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-family:ui-monospace,monospace;font-size:0.8rem;box-sizing:border-box;resize:vertical"></textarea>`
+								: `<input type="password" name="value" placeholder="${escape(k.placeholder)}" autocomplete="off" spellcheck="false" style="flex:1;min-width:240px;padding:8px 10px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-family:ui-monospace,monospace;font-size:0.85rem;box-sizing:border-box">`
+						}
+						<button type="submit" class="btn btn-primary" style="padding:8px 14px;white-space:nowrap">Save</button>
+						${
+							isSet
+								? `<button type="submit" formaction="/settings/system/${escape(k.key)}/delete" formmethod="POST" class="btn btn-danger" style="padding:8px 14px;white-space:nowrap" onclick="return confirm('Clear ${escape(k.label)}? Worker will fall back to env var (or fail if env not set either).')">Clear</button>`
+								: ""
+						}
+					</form>
+				</div>
+			</div>`;
+		}).join("")
+	}
 </div>
 
 <div class="card">
