@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use anyhow::{Context, Result};
 use sha2::{Sha256, Digest};
+use std::sync::Arc;
 #[cfg(test)]
 use std::collections::VecDeque;
 #[cfg(test)]
@@ -36,6 +37,45 @@ pub trait SystemBackend: Send + Sync {
     async fn remove_file(&self, path: &str) -> Result<()>;
     async fn sha256(&self, path: &str) -> Result<String>;
     async fn stat(&self, path: &str) -> Result<FileInfo>;
+}
+
+/// Wraps a SystemBackend, prefixing all commands with `sudo -u <user>`.
+pub struct BecomeBackend {
+    inner: Arc<dyn SystemBackend>,
+    user: String,
+}
+
+impl BecomeBackend {
+    pub fn new(inner: Arc<dyn SystemBackend>, user: &str) -> Self {
+        Self { inner, user: user.to_string() }
+    }
+    fn sudo_cmd<'a>(&self, cmd: &'a str, args: &'a [&'a str]) -> Vec<String> {
+        let mut v = vec!["sudo".to_string(), "-u".to_string(), self.user.clone(), cmd.to_string()];
+        v.extend(args.iter().map(|s| s.to_string()));
+        v
+    }
+}
+
+#[async_trait]
+impl SystemBackend for BecomeBackend {
+    async fn execute(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput> {
+        let c = self.sudo_cmd(cmd, args);
+        let refs: Vec<&str> = c.iter().map(|s| s.as_str()).collect();
+        self.inner.execute(refs[0], &refs[1..]).await
+    }
+    async fn execute_with_env(&self, cmd: &str, args: &[&str], env: &[(&str, &str)]) -> Result<CommandOutput> {
+        let c = self.sudo_cmd(cmd, args);
+        let refs: Vec<&str> = c.iter().map(|s| s.as_str()).collect();
+        self.inner.execute_with_env(refs[0], &refs[1..], env).await
+    }
+    async fn read_file(&self, path: &str) -> Result<String> { self.inner.read_file(path).await }
+    async fn write_file(&self, path: &str, content: &str, mode: Option<&str>) -> Result<()> {
+        self.inner.write_file(path, content, mode).await
+    }
+    async fn file_exists(&self, path: &str) -> bool { self.inner.file_exists(path).await }
+    async fn remove_file(&self, path: &str) -> Result<()> { self.inner.remove_file(path).await }
+    async fn sha256(&self, path: &str) -> Result<String> { self.inner.sha256(path).await }
+    async fn stat(&self, path: &str) -> Result<FileInfo> { self.inner.stat(path).await }
 }
 
 pub struct LocalBackend;

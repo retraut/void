@@ -17,6 +17,7 @@
   3. Check the new crate's API docs/changelog for breaking changes
   4. Update usage to match the new API
   5. Never pin to an older version to avoid fixing code — upgrade the code.
+- Some transitive deps are pinned by their dependents (e.g. `crypto-common = "=0.14.7"`). These can't be upgraded individually — the whole dependency chain must be upgraded together.
 
 ### Test Patterns
 - Unit tests go in `#[cfg(test)] mod tests { ... }` inside each module file (idiomatic Rust).

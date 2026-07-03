@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures_util::future::join_all;
 use serde::Serialize;
 use tracing::{info, warn};
-use crate::engine::backend::SystemBackend;
+use crate::engine::backend::{BecomeBackend, SystemBackend};
 use crate::engine::module::{TaskModule, TaskResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -30,6 +30,8 @@ pub struct PlaybookResult {
 pub struct Task {
     pub module: Box<dyn TaskModule>,
     pub notify: Vec<String>,
+    pub use_become: bool,
+    pub become_user: String,
 }
 
 pub struct Handler {
@@ -52,15 +54,22 @@ impl Runner {
         Self { backend }
     }
 
+    fn backend_for<'a>(&'a self, task: &Task) -> Arc<dyn SystemBackend> {
+        if task.use_become {
+            Arc::new(BecomeBackend::new(self.backend.clone(), &task.become_user))
+        } else {
+            self.backend.clone()
+        }
+    }
+
     pub async fn run(&self, playbook: &Playbook, mode: RunMode) -> PlaybookResult {
         let num_tasks = playbook.tasks.len();
 
         // Phase 1 — concurrent check_state via join_all.
-        // Each async block captures (i, task_ref, backend_ref).
-        // join_all polls all inline — borrows are valid for the call duration.
+        // Each async block captures (i, backend_arc, task_ref).
         let checks: Vec<_> = playbook.tasks.iter().enumerate().map(|(i, task)| {
-            let backend = &*self.backend;
-            async move { (i, task.module.check_state(backend).await) }
+            let backend = self.backend_for(task);
+            async move { (i, task.module.check_state(&*backend).await) }
         }).collect();
 
         let mut results: Vec<Option<TaskResult>> = vec![None; num_tasks];
@@ -97,7 +106,8 @@ impl Runner {
 
         for &i in &dirty {
             let task = &playbook.tasks[i];
-            match task.module.apply_changes(&*self.backend).await {
+            let backend = self.backend_for(task);
+            match task.module.apply_changes(&*backend).await {
                 Ok(r) => {
                     if r.changed {
                         for h in &task.notify {
@@ -127,7 +137,10 @@ impl Runner {
                 continue;
             }
             info!(handler = %handler.name, "running handler");
-            match handler.module.apply_changes(&*self.backend).await {
+            // Handlers use root become by default (following Ansible convention)
+            let handler_backend = Arc::new(BecomeBackend::new(self.backend.clone(), "root"))
+                as Arc<dyn SystemBackend>;
+            match handler.module.apply_changes(&*handler_backend).await {
                 Ok(r) => handler_results.push(r),
                 Err(e) => {
                     warn!(handler = %handler.name, error = %e, "handler failed");

@@ -87,15 +87,24 @@ async fn main() -> Result<()> {
 	}
 
 	// CLI mode: --apply-playbook <file>
-	// Reads a JSON playbook from file, runs the config_apply engine, prints result, exits.
+	// Reads a JSON or YAML playbook from file, runs the config_apply engine, prints result, exits.
 	let args: Vec<String> = std::env::args().collect();
 	if let Some(pos) = args.iter().position(|a| a == "--apply-playbook") {
 		if let Some(path) = args.get(pos + 1) {
-			let json = std::fs::read_to_string(path)
+			let raw = std::fs::read_to_string(path)
 				.context(format!("reading playbook: {}", path))?;
 			let registry = engine::ModuleRegistry::new();
-			let pb = registry.from_json_str(&json)
-				.context("parsing playbook")?;
+			let pb = if path.ends_with(".yml") || path.ends_with(".yaml") {
+				let yaml_val: serde_yaml::Value = serde_yaml::from_str(&raw)
+					.context("parsing YAML playbook")?;
+				let json_val: serde_json::Value = serde_json::to_value(&yaml_val)
+					.context("converting YAML to JSON")?;
+				registry.from_json_value(&json_val)
+					.context("parsing playbook")?
+			} else {
+				registry.from_json_str(&raw)
+					.context("parsing playbook")?
+			};
 			let backend = std::sync::Arc::new(engine::backend::LocalBackend)
 				as std::sync::Arc<dyn engine::backend::SystemBackend>;
 			let runner = engine::runner::Runner::new(backend);
