@@ -543,13 +543,6 @@ mod tests {
     use std::sync::Arc;
     use crate::engine::backend::CommandOutput;
 
-    fn mock_backend() -> (Arc<crate::engine::backend::MockBackend>, Arc<dyn SystemBackend>) {
-        let mb = crate::engine::backend::MockBackend::new();
-        let arc_mb = Arc::new(mb);
-        let backend: Arc<dyn SystemBackend> = arc_mb.clone();
-        (arc_mb, backend)
-    }
-
     fn make_module(params: &[(&str, Value)]) -> AptModule {
         let mut m = HashMap::new();
         for (k, v) in params {

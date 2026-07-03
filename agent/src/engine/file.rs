@@ -482,8 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_absent_when_gone() {
-        let mb = MockBackend::new();
-        let b: Arc<dyn SystemBackend> = Arc::new(mb);
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
         let m = mk(&[("path", s("/x")), ("state", s("absent"))]);
         assert!(m.check_state(&*b).await.unwrap());
     }
@@ -529,8 +528,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_already_gone() {
-        let mb = MockBackend::new();
-        let b: Arc<dyn SystemBackend> = Arc::new(mb);
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
         let m = mk(&[("path", s("/x")), ("state", s("absent"))]);
         let r = m.apply_changes(&*b).await.unwrap();
         assert!(!r.changed);

@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_volume_parsing() {
-        let (binds, mounts) = build_volumes(&["/host:/container:ro".into()]);
+        let (binds, _mounts) = build_volumes(&["/host:/container:ro".into()]);
         assert_eq!(binds[0], "/host:/container");
     }
 
