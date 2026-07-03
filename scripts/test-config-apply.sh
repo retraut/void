@@ -131,7 +131,10 @@ info "Running dry-run after apply..."
 DRY2=$(docker exec "$CONTAINER_NAME" \
   void-agent --apply-playbook "$PLAYBOOK_FILE" --check --pretty 2>/dev/null)
 C=$(echo "$DRY2" | jq '.summary.changed')
-[ "$C" = "0" ] || die "dry-run after apply: expected 0 changed — got $C"
+if [ "$C" != "0" ]; then
+  echo "$DRY2" | jq '.tasks[] | select(.changed == true)'
+  die "dry-run after apply: expected 0 changed — got $C"
+fi
 pass "dry-run after apply: all up-to-date"
 
 # ── Cleanup ───────────────────────────────────────────────────
