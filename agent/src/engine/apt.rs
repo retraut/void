@@ -792,7 +792,7 @@ mod tests {
     #[test]
     fn test_policy_guard_noop() {
         // code=None → guard is a no-op
-        let mb = crate::engine::backend::MockBackend::new();
+        let _mb = crate::engine::backend::MockBackend::new();
         let guard = PolicyGuard { code: None, had_backup: false };
         drop(guard);
     }
