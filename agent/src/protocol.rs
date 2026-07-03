@@ -13,6 +13,15 @@
 //! receiving side to reject the frame — this is the point.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Metrics {
+    pub cpu_percent: f64,
+    pub memory_mb: f64,
+    pub memory_percent: f64,
+}
 
 /// Frames sent by the agent to the worker.
 ///
@@ -30,7 +39,11 @@ pub enum AgentOut {
         session_token: Option<String>,
     },
     #[serde(rename = "heartbeat")]
-    Heartbeat { timestamp: u64 },
+    Heartbeat {
+        timestamp: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metrics: Option<Metrics>,
+    },
     #[serde(rename = "log")]
     Log {
         deployment_id: String,
@@ -53,6 +66,34 @@ pub enum AgentOut {
     },
     #[serde(rename = "ready")]
     Ready { timestamp: u64 },
+    #[serde(rename = "config_apply_done")]
+    ConfigApplyDone {
+        config_id: String,
+        playbook: String,
+        mode: String,
+        summary: ConfigSummary,
+        tasks: Vec<ConfigTaskResult>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigSummary {
+    pub ok: u32,
+    pub changed: u32,
+    pub failed: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigTaskResult {
+    pub name: String,
+    pub module: String,
+    pub changed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -126,6 +167,14 @@ pub enum WorkerToAgent {
     },
     #[serde(rename = "shutdown")]
     Shutdown {},
+    #[serde(rename = "config_apply")]
+    ConfigApply {
+        config_id: String,
+        playbook: JsonValue,
+        mode: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sig: Option<String>,
+    },
     #[serde(rename = "error")]
     Error {
         code: String,
@@ -180,9 +229,35 @@ mod tests {
         let raw = r#"{"type":"heartbeat","timestamp":1747526400}"#;
         let f: AgentOut = serde_json::from_str(raw).expect("parse");
         match f {
-            AgentOut::Heartbeat { timestamp } => assert_eq!(timestamp, 1747526400),
+            AgentOut::Heartbeat { timestamp, metrics } => {
+                assert_eq!(timestamp, 1747526400);
+                assert!(metrics.is_none());
+            }
             _ => panic!("expected Heartbeat"),
         }
+    }
+
+    #[test]
+    fn deserialize_heartbeat_with_metrics() {
+        let raw = r#"{"type":"heartbeat","timestamp":1747526400,"metrics":{"cpu_percent":42.5,"memory_mb":512.0,"memory_percent":25.0}}"#;
+        let f: AgentOut = serde_json::from_str(raw).expect("parse");
+        match f {
+            AgentOut::Heartbeat { timestamp, metrics } => {
+                assert_eq!(timestamp, 1747526400);
+                let m = metrics.expect("should have metrics");
+                assert_eq!(m.cpu_percent, 42.5);
+                assert_eq!(m.memory_mb, 512.0);
+                assert_eq!(m.memory_percent, 25.0);
+            }
+            _ => panic!("expected Heartbeat"),
+        }
+    }
+
+    #[test]
+    fn deserialize_heartbeat_rejects_extra_field_in_metrics() {
+        let raw = r#"{"type":"heartbeat","timestamp":1,"metrics":{"cpu_percent":0.0,"memory_mb":0.0,"memory_percent":0.0,"extra":"bad"}}"#;
+        let r: Result<AgentOut, _> = serde_json::from_str(raw);
+        assert!(r.is_err(), "deny_unknown_fields on Metrics should reject extra field");
     }
 
     #[test]

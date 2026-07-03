@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -23,12 +24,13 @@ use tracing::{debug, error, info, warn};
 
 mod config;
 mod detect;
+mod engine;
 mod keys;
 mod protocol;
 
 use config::Config;
 use keys::Identity;
-pub use protocol::{AgentOut, DeployStatus, LogStream, WorkerToAgent};
+pub use protocol::{AgentOut, DeployStatus, LogStream, Metrics, WorkerToAgent};
 
 #[derive(Debug, Clone)]
 struct LogLine {
@@ -84,6 +86,38 @@ async fn main() -> Result<()> {
 		}
 	}
 
+	// CLI mode: --apply-playbook <file>
+	// Reads a JSON playbook from file, runs the config_apply engine, prints result, exits.
+	let args: Vec<String> = std::env::args().collect();
+	if let Some(pos) = args.iter().position(|a| a == "--apply-playbook") {
+		if let Some(path) = args.get(pos + 1) {
+			let json = std::fs::read_to_string(path)
+				.context(format!("reading playbook: {}", path))?;
+			let registry = engine::ModuleRegistry::new();
+			let pb = registry.from_json_str(&json)
+				.context("parsing playbook")?;
+			let backend = std::sync::Arc::new(engine::backend::LocalBackend)
+				as std::sync::Arc<dyn engine::backend::SystemBackend>;
+			let runner = engine::runner::Runner::new(backend);
+			let mode = if args.contains(&"--check".to_string()) || args.contains(&"--dry-run".to_string()) {
+				engine::runner::RunMode::Check
+			} else {
+				engine::runner::RunMode::Apply
+			};
+			let result = runner.run(&pb, mode).await;
+			// Serialize with serde_json, respecting --pretty or not
+			if args.contains(&"--pretty".to_string()) {
+				println!("{}", serde_json::to_string_pretty(&result)?);
+			} else {
+				println!("{}", serde_json::to_string(&result)?);
+			}
+			if result.summary.failed > 0 {
+				std::process::exit(1);
+			}
+			return Ok(());
+		}
+	}
+
 	let cfg = Config::load().context("loading config")?;
 	let state_dir = cfg.state_dir();
 	let identity = Arc::new(Identity::load_or_create(&state_dir).context("loading identity")?);
@@ -128,6 +162,15 @@ async fn main() -> Result<()> {
 type WsStream = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> Result<()> {
+    // System info for CPU/memory metrics
+    let mut sys = System::new_with_specifics(
+        RefreshKind::nothing()
+            .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
+            .with_memory(MemoryRefreshKind::everything()),
+    );
+    // Small delay to let CPU measurement accumulate
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
     let ws_url = format!("{}/cell/{}", cfg.api_base.replace("http", "ws"), cfg.server_id);
     info!(url = %ws_url, "connecting");
 
@@ -184,7 +227,17 @@ async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> Result<()> {
                     None => std::future::pending().await,
                 }
             } => {
-                let hb = AgentOut::Heartbeat { timestamp: now_ts() };
+                sys.refresh_cpu_usage();
+                sys.refresh_memory();
+                let metrics = Some(Metrics {
+                    cpu_percent: sys.global_cpu_usage() as f64,
+                    memory_mb: sys.used_memory() as f64 / 1024.0 / 1024.0,
+                    memory_percent: sys.used_memory() as f64 / sys.total_memory() as f64 * 100.0,
+                });
+                let hb = AgentOut::Heartbeat {
+                    timestamp: now_ts(),
+                    metrics,
+                };
                 if let Err(e) = ws.send(Message::Text(serde_json::to_string(&hb)?)).await {
                     warn!(error = %e, "heartbeat send failed");
                     return Err(e.into());
@@ -196,11 +249,9 @@ async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> Result<()> {
                     Some(Ok(Message::Text(text))) => {
                         let is_registered = handle_incoming(&text, cfg, identity, &mut ws).await?;
                         if is_registered && heartbeat.is_none() {
-                            info!("starting heartbeat (30s interval)");
-                            let mut hb = interval(Duration::from_secs(30));
+                            info!("starting heartbeat (5s interval)");
+                            let mut hb = interval(Duration::from_secs(5));
                             hb.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                            // Skip the immediate first tick — already registered
-                            hb.tick().await;
                             heartbeat = Some(hb);
                         }
                     }
@@ -361,6 +412,65 @@ async fn handle_incoming(
                 ws,
             )
             .await;
+        }
+        WorkerToAgent::ConfigApply {
+            config_id,
+            playbook,
+            mode,
+            sig: _sig,
+        } => {
+            info!(config_id = %config_id, mode = %mode, "config_apply requested");
+            let registry = engine::ModuleRegistry::new();
+            match registry.from_json_value(&playbook) {
+                Ok(pb) => {
+                    let backend = std::sync::Arc::new(engine::backend::LocalBackend)
+                        as std::sync::Arc<dyn engine::backend::SystemBackend>;
+                    let runner = engine::runner::Runner::new(backend);
+                    let run_mode = match mode.as_str() {
+                        "check" | "dry_run" => engine::runner::RunMode::Check,
+                        _ => engine::runner::RunMode::Apply,
+                    };
+                    let result = runner.run(&pb, run_mode).await;
+
+                    let done = AgentOut::ConfigApplyDone {
+                        config_id,
+                        playbook: result.playbook,
+                        mode: mode.clone(),
+                        summary: protocol::ConfigSummary {
+                            ok: result.summary.ok,
+                            changed: result.summary.changed,
+                            failed: result.summary.failed,
+                        },
+                        tasks: result.tasks.into_iter().map(|t| protocol::ConfigTaskResult {
+                            name: t.name,
+                            module: t.module.to_string(),
+                            changed: t.changed,
+                            output: t.output,
+                            error: t.error,
+                        }).collect(),
+                    };
+                    if let Err(e) = ws.send(Message::Text(serde_json::to_string(&done)?)).await {
+                        warn!(error = %e, "failed to send config_apply_done");
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to parse playbook");
+                    let err = AgentOut::ConfigApplyDone {
+                        config_id,
+                        playbook: String::new(),
+                        mode: mode.clone(),
+                        summary: protocol::ConfigSummary { ok: 0, changed: 0, failed: 1 },
+                        tasks: vec![protocol::ConfigTaskResult {
+                            name: "parse".into(),
+                            module: "playbook".into(),
+                            changed: false,
+                            output: None,
+                            error: Some(format!("parse error: {}", e)),
+                        }],
+                    };
+                    let _ = ws.send(Message::Text(serde_json::to_string(&err)?)).await;
+                }
+            }
         }
         WorkerToAgent::Shutdown {} => {
             info!("shutdown requested, exiting");

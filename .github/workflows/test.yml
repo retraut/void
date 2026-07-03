@@ -193,3 +193,30 @@ jobs:
             worker/cloud-init-vitest-log.txt
             worker/cloud-init-vitest-results.json
           if-no-files-found: ignore
+
+  agent-config-apply:
+    name: Agent config_apply integration test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+      - name: Build void-agent (release)
+        run: cargo build --release
+      - name: Run config_apply integration test
+        run: bash ../scripts/test-config-apply.sh --no-build
+      - name: Upload agent log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: config-apply-log
+          path: /tmp/void-config-apply-test/
+          if-no-files-found: ignore
