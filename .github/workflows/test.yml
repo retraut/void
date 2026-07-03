@@ -247,3 +247,41 @@ jobs:
           name: docker-apply-log
           path: /tmp/void-docker-apply-test/
           if-no-files-found: ignore
+
+  agent-module-tests:
+    name: Agent ${{ matrix.module }} unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [apt, file, user, docker]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+      - name: Build (default)
+        if: matrix.module != 'docker'
+        run: cargo build
+      - name: Build (docker feature)
+        if: matrix.module == 'docker'
+        run: cargo build --features docker
+      - name: Run ${{ matrix.module }} module tests
+        run: |
+          EXTRA=""
+          [ "${{ matrix.module }}" = "docker" ] && EXTRA="--features docker"
+          cargo test $EXTRA "engine::${{ matrix.module }}::" 2>&1
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-${{ matrix.module }}-test-log
+          path: agent/target/debug/*.log
+          if-no-files-found: ignore

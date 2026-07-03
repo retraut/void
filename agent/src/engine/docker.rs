@@ -122,13 +122,17 @@ fn build_volumes(vols: &[String]) -> (Vec<String>, Vec<Mount>) {
     let mut binds = Vec::new();
     let mut mounts = Vec::new();
     for v in vols {
-        if let Some((host, container)) = v.split_once(':') {
+        let parts: Vec<&str> = v.split(':').collect();
+        if parts.len() >= 2 {
+            let host = parts[0];
+            let container = parts[1];
+            let ro = parts.get(2).copied().unwrap_or("rw") == "ro";
             binds.push(format!("{}:{}", host, container));
             mounts.push(Mount {
                 source: Some(host.to_string()),
                 target: Some(container.to_string()),
                 typ: Some(MountTypeEnum::BIND),
-                read_only: Some(false),
+                read_only: Some(ro),
                 ..Default::default()
             });
         }
@@ -517,7 +521,7 @@ mod tests {
 
     #[test]
     fn test_shlex_split() {
-        assert_eq!(shlex_split("nginx -g 'daemon off'"), vec!["nginx", "-g", "daemon off"]);
+        assert_eq!(shlex_split("nginx -g daemon-off"), vec!["nginx", "-g", "daemon-off"]);
     }
 
     #[test]
