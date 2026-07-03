@@ -107,7 +107,9 @@ impl TaskModule for FileModule {
             }
         }
         if let (Some(ref desired_mode), Some(ref current_mode)) = (&self.mode, &info.mode) {
-            if desired_mode != current_mode {
+            let d = u32::from_str_radix(desired_mode, 8).unwrap_or(0);
+            let c = u32::from_str_radix(current_mode, 8).unwrap_or(0);
+            if d != c {
                 return Ok(false);
             }
         }
