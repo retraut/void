@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use anyhow::{Context, Result};
 use sha2::{Sha256, Digest};
+#[cfg(test)]
 use std::collections::VecDeque;
+#[cfg(test)]
 use std::sync::Mutex;
 
 #[derive(Debug, Clone)]
@@ -148,23 +150,26 @@ impl SystemBackend for LocalBackend {
     }
 }
 
+#[cfg(test)]
 pub struct MockBackend {
     commands: Mutex<VecDeque<MockCommand>>,
     files: Mutex<std::collections::HashMap<String, MockFile>>,
 }
 
+#[cfg(test)]
 struct MockCommand {
     cmd: String,
     args: Vec<String>,
     output: CommandOutput,
 }
 
+#[cfg(test)]
 struct MockFile {
     content: String,
     mode: Option<String>,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 impl MockBackend {
     pub fn new() -> Self {
         Self {
@@ -191,6 +196,7 @@ impl MockBackend {
     }
 }
 
+#[cfg(test)]
 #[async_trait]
 impl SystemBackend for MockBackend {
     async fn execute(&self, cmd: &str, args: &[&str]) -> Result<CommandOutput> {
