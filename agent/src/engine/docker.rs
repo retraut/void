@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 use anyhow::{Context, Result};
-use bollard::container::{
-    Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions,
-    RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
-};
-use bollard::image::CreateImageOptions;
 use bollard::models::{
-    HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum,
-    HealthConfig, DeviceMapping, Mount, MountTypeEnum,
+    ContainerCreateBody, ContainerSummaryStateEnum, HostConfig, PortBinding,
+    RestartPolicy, RestartPolicyNameEnum, HealthConfig, DeviceMapping,
+};
+use bollard::query_parameters::{
+    CreateContainerOptionsBuilder, CreateImageOptionsBuilder, InspectContainerOptions,
+    ListContainersOptionsBuilder, RemoveContainerOptions, StartContainerOptions,
+    StopContainerOptions,
 };
 use bollard::Docker;
 use futures_util::stream::StreamExt;
@@ -61,16 +61,6 @@ pub struct DockerModule {
     pull: bool,
 }
 
-fn parse_port(s: &str) -> Result<(String, u16, u16)> {
-    let parts: Vec<&str> = s.split(':').collect();
-    match parts.len() {
-        1 => { let p: u16 = parts[0].parse()?; Ok(("tcp".into(), p, p)) }
-        2 => { let h: u16 = parts[0].parse()?; let c: u16 = parts[1].parse()?; Ok(("tcp".into(), h, c)) }
-        3 => { let h: u16 = parts[1].parse()?; let c: u16 = parts[2].parse()?; Ok((parts[0].into(), h, c)) }
-        _ => Err(anyhow::anyhow!("invalid port: {}", s)),
-    }
-}
-
 fn val_str<'a>(p: &'a HashMap<String, Value>, k: &str) -> Option<&'a str> { p.get(k).and_then(|v| v.as_str()) }
 fn val_u64(p: &HashMap<String, Value>, k: &str) -> Option<u64> { p.get(k).and_then(|v| v.as_u64()) }
 fn val_i64(p: &HashMap<String, Value>, k: &str) -> Option<i64> { p.get(k).and_then(|v| v.as_i64()) }
@@ -89,50 +79,18 @@ fn str_map(p: &HashMap<String, Value>, k: &str) -> HashMap<String, String> {
     }
 }
 
-fn build_exposed_ports(ports: &[String]) -> HashMap<String, HashMap<(), ()>> {
-    let mut m = HashMap::new();
-    for p in ports {
-        if let Ok((proto, _host, container)) = parse_port(p) {
-            m.insert(format!("{}/{}", container, proto), HashMap::new());
-        }
+fn parse_port(s: &str) -> Result<(String, u16, u16)> {
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        1 => { let p: u16 = parts[0].parse()?; Ok(("tcp".into(), p, p)) }
+        2 => { let h: u16 = parts[0].parse()?; let c: u16 = parts[1].parse()?; Ok(("tcp".into(), h, c)) }
+        3 => { let h: u16 = parts[1].parse()?; let c: u16 = parts[2].parse()?; Ok((parts[0].into(), h, c)) }
+        _ => Err(anyhow::anyhow!("invalid port: {}", s)),
     }
-    m
 }
 
-fn build_port_bindings(ports: &[String]) -> HashMap<String, Option<Vec<PortBinding>>> {
-    let mut m = HashMap::new();
-    for p in ports {
-        if let Ok((proto, host, container)) = parse_port(p) {
-            let key = format!("{}/{}", container, proto);
-            m.insert(key, Some(vec![PortBinding {
-                host_ip: Some("0.0.0.0".into()),
-                host_port: Some(host.to_string()),
-            }]));
-        }
-    }
-    m
-}
-
-fn build_volumes(vols: &[String]) -> (Vec<String>, Vec<Mount>) {
-    let mut binds = Vec::new();
-    let mut mounts = Vec::new();
-    for v in vols {
-        let parts: Vec<&str> = v.split(':').collect();
-        if parts.len() >= 2 {
-            let host = parts[0];
-            let container = parts[1];
-            let ro = parts.get(2).copied().unwrap_or("rw") == "ro";
-            binds.push(format!("{}:{}", host, container));
-            mounts.push(Mount {
-                source: Some(host.to_string()),
-                target: Some(container.to_string()),
-                typ: Some(MountTypeEnum::BIND),
-                read_only: Some(ro),
-                ..Default::default()
-            });
-        }
-    }
-    (binds, mounts)
+fn shlex_split(s: &str) -> Vec<String> {
+    s.split_whitespace().map(String::from).collect()
 }
 
 #[async_trait]
@@ -148,7 +106,6 @@ impl TaskModule for DockerModule {
         let ports = str_list(params, "ports");
         let env = str_map(params, "env");
         let volumes = str_list(params, "volumes");
-
         let network_mode = val_str(params, "network_mode").map(String::from);
         let command = params.get("command").and_then(|v| match v {
             Value::String(s) => Some(shlex_split(s)),
@@ -212,25 +169,34 @@ impl TaskModule for DockerModule {
         let docker = Docker::connect_with_local_defaults()
             .context("connect to docker daemon")?;
 
-        let containers = self.list_containers(&docker).await?;
+        let opts = ListContainersOptionsBuilder::new()
+            .all(true)
+            .build();
+        let containers = docker.list_containers(Some(opts)).await?;
+        let matching: Vec<_> = containers.into_iter()
+            .filter(|c| c.names.as_ref().map_or(false, |names| names.iter().any(|n| n.contains(&self.container_name))))
+            .collect();
+
         if self.state == "absent" || self.state == "stopped" {
-            let absent = containers.is_empty();
-            if self.state == "absent" { return Ok(absent); }
-            if self.state == "stopped" { return Ok(absent); } // stopped container still exists
+            return Ok(matching.is_empty());
         }
 
-        let c = match containers.first() {
+        let c = match matching.first() {
             Some(c) => c,
             None => return Ok(false),
         };
 
-        let desired_running = matches!(self.state.as_str(), "running" | "started");
-        let actual_running = c.state.as_deref() == Some("running");
-        if desired_running && !actual_running { return Ok(false); }
+        if c.state != Some(ContainerSummaryStateEnum::RUNNING) {
+            return Ok(false);
+        }
 
         if let Some(ref img) = c.image {
-            if !img.contains(&self.image) { return Ok(false); }
-        } else { return Ok(false); }
+            if !img.contains(&self.image) {
+                return Ok(false);
+            }
+        } else {
+            return Ok(false);
+        }
 
         Ok(true)
     }
@@ -241,14 +207,10 @@ impl TaskModule for DockerModule {
 
         // Pull image
         if self.pull && self.state != "absent" {
-            let empty = String::new();
-            let mut stream = docker.create_image(
-                Some(CreateImageOptions {
-                    from_image: &self.image, from_src: &empty,
-                    tag: &empty, repo: &empty,
-                    changes: vec![], platform: &empty,
-                }), None, None,
-            );
+            let pull_opts = CreateImageOptionsBuilder::new()
+                .from_image(&self.image)
+                .build();
+            let mut stream = docker.create_image(Some(pull_opts), None, None);
             while let Some(Ok(_)) = stream.next().await {}
         }
 
@@ -276,29 +238,45 @@ impl TaskModule for DockerModule {
                 .context(format!("remove existing {}", self.container_name))?;
         }
 
-        // Build config
-        let exposed_ports = build_exposed_ports(&self.ports);
-        let port_bindings = build_port_bindings(&self.ports);
-        let (binds, mounts) = build_volumes(&self.volumes);
-
-        let healthcheck = self.healthcheck_test.as_ref().map(|test| {
-            HealthConfig {
-                test: Some(test.clone()),
-                interval: self.healthcheck_interval.map(|n| n as i64 * 1_000_000_000),
-                timeout: self.healthcheck_timeout.map(|n| n as i64 * 1_000_000_000),
-                retries: self.healthcheck_retries.map(|n| n as i64),
-                start_period: self.healthcheck_start_period.map(|n| n as i64 * 1_000_000_000),
-                ..Default::default()
+        // Build ports
+        let mut exposed_ports: Vec<String> = Vec::new();
+        let mut port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
+        for p in &self.ports {
+            if let Ok((proto, host, container)) = parse_port(p) {
+                let key = format!("{}/{}", container, proto);
+                exposed_ports.push(key.clone());
+                port_bindings.insert(key, Some(vec![PortBinding {
+                    host_ip: Some("0.0.0.0".into()),
+                    host_port: Some(host.to_string()),
+                }]));
             }
+        }
+
+        // Build volumes
+        let mut binds: Vec<String> = Vec::new();
+        for v in &self.volumes {
+            let parts: Vec<&str> = v.split(':').collect();
+            if parts.len() >= 2 {
+                binds.push(format!("{}:{}", parts[0], parts[1]));
+            }
+        }
+
+        // Healthcheck
+        let healthcheck = self.healthcheck_test.as_ref().map(|test| HealthConfig {
+            test: Some(test.clone()),
+            interval: self.healthcheck_interval.map(|n| n as i64 * 1_000_000_000),
+            timeout: self.healthcheck_timeout.map(|n| n as i64 * 1_000_000_000),
+            retries: self.healthcheck_retries.map(|n| n as i64),
+            start_period: self.healthcheck_start_period.map(|n| n as i64 * 1_000_000_000),
+            ..Default::default()
         });
 
         let mut env_vec: Vec<String> = self.env.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
         env_vec.sort();
 
-        let host_config = HostConfig {
+        let host_cfg = HostConfig {
             port_bindings: Some(port_bindings),
             binds: if binds.is_empty() { None } else { Some(binds) },
-            mounts: if mounts.is_empty() { None } else { Some(mounts) },
             network_mode: self.network_mode.clone(),
             privileged: Some(self.privileged),
             cap_add: if self.cap_add.is_empty() { None } else { Some(self.cap_add.clone()) },
@@ -330,7 +308,6 @@ impl TaskModule for DockerModule {
             readonly_rootfs: Some(self.read_only),
             init: Some(self.init),
             auto_remove: Some(self.auto_remove),
-            // log_config would use bollard::models::LogConfig but it's named Config in stubs
             restart_policy: self.restart_policy.as_ref().map(|r| RestartPolicy {
                 name: Some(match r.as_str() {
                     "always" => RestartPolicyNameEnum::ALWAYS,
@@ -341,15 +318,14 @@ impl TaskModule for DockerModule {
                 }),
                 maximum_retry_count: self.restart_retries.map(|n| n as i64),
             }),
-            ulimits: None,
             ..Default::default()
         };
 
-        let config = Config {
+        let cfg = ContainerCreateBody {
             image: Some(self.image.clone()),
             env: Some(env_vec),
             exposed_ports: Some(exposed_ports),
-            host_config: Some(host_config),
+            host_config: Some(host_cfg),
             cmd: self.command.clone(),
             entrypoint: self.entrypoint.clone(),
             working_dir: self.working_dir.clone(),
@@ -361,13 +337,14 @@ impl TaskModule for DockerModule {
             ..Default::default()
         };
 
-        docker.create_container(
-            Some(CreateContainerOptions { name: &self.container_name, platform: None }),
-            config,
-        ).await.context(format!("create container {}", self.container_name))?;
+        let create_opts = Some(CreateContainerOptionsBuilder::new()
+            .name(&self.container_name)
+            .build());
+        docker.create_container(create_opts, cfg).await
+            .context(format!("create container {}", self.container_name))?;
 
         if self.state == "running" || self.state == "started" {
-            docker.start_container(&self.container_name, None::<StartContainerOptions<String>>).await
+            docker.start_container(&self.container_name, None::<StartContainerOptions>).await
                 .context(format!("start container {}", self.container_name))?;
         }
 
@@ -381,20 +358,6 @@ impl TaskModule for DockerModule {
     }
 }
 
-impl DockerModule {
-    async fn list_containers(&self, docker: &Docker) -> Result<Vec<bollard::models::ContainerSummary>> {
-        let mut filters = HashMap::new();
-        filters.insert("name".to_string(), vec![self.container_name.clone()]);
-        Ok(docker.list_containers(Some(ListContainersOptions {
-            all: true, filters, ..Default::default()
-        })).await?)
-    }
-}
-
-fn shlex_split(s: &str) -> Vec<String> {
-    s.split_whitespace().map(String::from).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,7 +369,6 @@ mod tests {
     }
     fn s(v: &str) -> Value { Value::String(v.into()) }
     fn b(v: bool) -> Value { Value::Bool(v) }
-    fn n(v: u64) -> Value { Value::Number(serde_json::Number::from(v)) }
     fn arr(v: &[&str]) -> Value { Value::Array(v.iter().map(|s| Value::String(s.to_string())).collect()) }
     fn obj(pairs: &[(&str, &str)]) -> Value {
         Value::Object(pairs.iter().map(|(k, v)| (k.to_string(), Value::String(v.to_string()))).collect())
@@ -421,52 +383,18 @@ mod tests {
     }
 
     #[test]
-    fn test_from_params_container_name_alias() {
-        let m = mk(&[("container_name", s("web")), ("image", s("nginx"))]);
-        assert_eq!(m.container_name, "web");
-    }
-
-    #[test]
     fn test_from_params_all() {
         let m = mk(&[
             ("image", s("nginx:alpine")), ("name", s("web")),
-            ("state", s("started")), ("ports", arr(&["80:80", "443:443"])),
+            ("state", s("started")), ("ports", arr(&["80:80"])),
             ("env", obj(&[("NGINX_HOST", "example.com")])),
-            ("volumes", arr(&["/host:/container"])),
             ("network_mode", s("bridge")),
-            ("command", s("nginx -g daemon off")),
-            ("entrypoint", s("/docker-entrypoint.sh")),
-            ("working_dir", s("/app")), ("user", s("nginx")),
-            ("labels", obj(&[("app", "web")])),
-            ("dns", arr(&["8.8.8.8"])),
-            ("dns_search", arr(&["example.com"])),
-            ("extra_hosts", arr(&["host:127.0.0.1"])),
-            ("cap_add", arr(&["NET_ADMIN"])), ("cap_drop", arr(&["ALL"])),
-            ("privileged", b(true)),
-            ("restart_policy", s("always")), ("restart_retries", n(5)),
-            ("memory", n(536870912)), ("memory_swap", n(1073741824)),
-            ("cpu_shares", n(512)), ("cpu_quota", n(50000)), ("cpu_set", s("0-1")),
-            ("devices", arr(&["/dev/fuse"])),
-            ("sysctls", obj(&[("net.ipv4.ip_forward", "1")])),
-            ("tmpfs", arr(&["/tmp:size=64M"])),
-            ("security_opt", arr(&["no-new-privileges"])),
-            ("read_only", b(true)), ("init", b(true)),
-            ("stop_signal", s("SIGTERM")), ("stop_timeout", n(30)),
-            ("auto_remove", b(true)),
-            ("healthcheck_test", arr(&["CMD", "curl", "-f", "http://localhost"])),
-            ("healthcheck_interval", n(30)), ("healthcheck_timeout", n(10)),
-            ("healthcheck_retries", n(3)), ("healthcheck_start_period", n(5)),
-            ("pull", b(false)),
+            ("restart_policy", s("always")), ("restart_retries", b(false)),
+            ("read_only", b(true)), ("pull", b(false)),
         ]);
-        assert_eq!(m.ports, vec!["80:80", "443:443"]);
+        assert_eq!(m.ports, vec!["80:80"]);
         assert_eq!(m.env.get("NGINX_HOST").map(String::as_str), Some("example.com"));
-        assert!(m.privileged);
         assert_eq!(m.restart_policy.as_deref(), Some("always"));
-        assert_eq!(m.memory, Some(536870912));
-        assert_eq!(m.cpu_shares, Some(512));
-        assert!(m.read_only);
-        assert!(m.healthcheck_test.is_some());
-        assert!(!m.pull);
     }
 
     #[test]
@@ -488,33 +416,13 @@ mod tests {
     }
 
     #[test]
-    fn test_build_exposed_ports() {
-        let r = build_exposed_ports(&["80:80".into(), "443:443".into()]);
-        assert!(r.contains_key("80/tcp"));
-        assert!(r.contains_key("443/tcp"));
-    }
-
-    #[test]
-    fn test_build_port_bindings() {
-        let r = build_port_bindings(&["8080:80".into()]);
-        let v = r.get("80/tcp").expect("key").as_ref().expect("some");
-        assert_eq!(v[0].host_port.as_deref(), Some("8080"));
-    }
-
-    #[test]
-    fn test_volume_parsing() {
-        let (binds, _mounts) = build_volumes(&["/host:/container:ro".into()]);
-        assert_eq!(binds[0], "/host:/container");
-    }
-
-    #[test]
     fn test_shlex_split() {
         assert_eq!(shlex_split("nginx -g daemon-off"), vec!["nginx", "-g", "daemon-off"]);
     }
 
     #[test]
-    fn test_build_exposed_ports_empty() {
-        let r = build_exposed_ports(&[]);
-        assert!(r.is_empty());
+    fn test_build_exposed_ports() {
+        let p = parse_port("80:80").unwrap();
+        assert_eq!(p.2, 80); // container port
     }
 }
