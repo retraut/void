@@ -2,18 +2,17 @@ use async_trait::async_trait;
 use anyhow::{Context, Result};
 use bollard::container::{
     Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions,
-    LogsOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions, WaitContainerOptions,
+    RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
 };
 use bollard::image::CreateImageOptions;
 use bollard::models::{
-    ContainerCreateResponse, HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum,
-    HealthConfig, ResourcesUlimits, DeviceMapping, Mount, MountTypeEnum,
+    HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum,
+    HealthConfig, DeviceMapping, Mount, MountTypeEnum,
 };
 use bollard::Docker;
 use futures_util::stream::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
-use tracing::info;
 use crate::engine::backend::SystemBackend;
 use crate::engine::module::{TaskModule, TaskResult};
 
@@ -25,7 +24,6 @@ pub struct DockerModule {
     ports: Vec<String>,
     env: HashMap<String, String>,
     volumes: Vec<String>,
-    networks: Vec<String>,
     network_mode: Option<String>,
     command: Option<Vec<String>>,
     entrypoint: Option<Vec<String>>,
@@ -60,9 +58,6 @@ pub struct DockerModule {
     stop_signal: Option<String>,
     stop_timeout: Option<u64>,
     auto_remove: bool,
-    publish_all_ports: bool,
-    log_driver: Option<String>,
-    log_opts: HashMap<String, String>,
     pull: bool,
 }
 
@@ -153,7 +148,7 @@ impl TaskModule for DockerModule {
         let ports = str_list(params, "ports");
         let env = str_map(params, "env");
         let volumes = str_list(params, "volumes");
-        let networks = str_list(params, "networks");
+
         let network_mode = val_str(params, "network_mode").map(String::from);
         let command = params.get("command").and_then(|v| match v {
             Value::String(s) => Some(shlex_split(s)),
@@ -200,20 +195,16 @@ impl TaskModule for DockerModule {
         let stop_signal = val_str(params, "stop_signal").map(String::from);
         let stop_timeout = val_u64(params, "stop_timeout");
         let auto_remove = val_bool(params, "auto_remove").unwrap_or(false);
-        let publish_all_ports = val_bool(params, "publish_all_ports").unwrap_or(false);
-        let log_driver = val_str(params, "log_driver").map(String::from);
-        let log_opts = str_map(params, "log_opts");
         let pull = val_bool(params, "pull").unwrap_or(true);
 
         Ok(DockerModule {
-            name, container_name, image, state, ports, env, volumes, networks, network_mode,
+            name, container_name, image, state, ports, env, volumes, network_mode,
             command, entrypoint, working_dir, user, labels, dns, dns_search, extra_hosts,
             cap_add, cap_drop, privileged, restart_policy, restart_retries,
             healthcheck_test, healthcheck_interval, healthcheck_timeout, healthcheck_retries,
             healthcheck_start_period, memory, memory_swap, memory_reservation,
             cpu_shares, cpu_quota, cpu_set, devices, sysctls, tmpfs, security_opt,
-            read_only, init, stop_signal, stop_timeout, auto_remove, publish_all_ports,
-            log_driver, log_opts, pull,
+            read_only, init, stop_signal, stop_timeout, auto_remove, pull,
         })
     }
 
@@ -442,7 +433,6 @@ mod tests {
             ("state", s("started")), ("ports", arr(&["80:80", "443:443"])),
             ("env", obj(&[("NGINX_HOST", "example.com")])),
             ("volumes", arr(&["/host:/container"])),
-            ("networks", arr(&["front"])),
             ("network_mode", s("bridge")),
             ("command", s("nginx -g daemon off")),
             ("entrypoint", s("/docker-entrypoint.sh")),
@@ -462,9 +452,7 @@ mod tests {
             ("security_opt", arr(&["no-new-privileges"])),
             ("read_only", b(true)), ("init", b(true)),
             ("stop_signal", s("SIGTERM")), ("stop_timeout", n(30)),
-            ("auto_remove", b(true)), ("publish_all_ports", b(true)),
-            ("log_driver", s("json-file")),
-            ("log_opts", obj(&[("max-size", "10m")])),
+            ("auto_remove", b(true)),
             ("healthcheck_test", arr(&["CMD", "curl", "-f", "http://localhost"])),
             ("healthcheck_interval", n(30)), ("healthcheck_timeout", n(10)),
             ("healthcheck_retries", n(3)), ("healthcheck_start_period", n(5)),

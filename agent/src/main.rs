@@ -210,7 +210,7 @@ async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> Result<()> {
             session_token: None,
         }
     };
-    ws.send(Message::Text(serde_json::to_string(&register)?))
+    ws.send(Message::text(serde_json::to_string(&register)?))
         .await
         .context("sending register")?;
 
@@ -238,7 +238,7 @@ async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> Result<()> {
                     timestamp: now_ts(),
                     metrics,
                 };
-                if let Err(e) = ws.send(Message::Text(serde_json::to_string(&hb)?)).await {
+                if let Err(e) = ws.send(Message::text(serde_json::to_string(&hb)?)).await {
                     warn!(error = %e, "heartbeat send failed");
                     return Err(e.into());
                 }
@@ -297,7 +297,7 @@ async fn handle_incoming(
                 error: Some(format!("invalid frame: {}", e)),
             })
             .unwrap_or_else(|_| r#"{"type":"error","code":"bad_frame"}"#.to_string());
-            let _ = ws.send(Message::Text(err)).await;
+            let _ = ws.send(Message::text(err)).await;
             return Ok(false);
         }
     };
@@ -315,7 +315,7 @@ async fn handle_incoming(
         }
         WorkerToAgent::Ping {} => {
             let ready = AgentOut::Ready { timestamp: now_ts() };
-            ws.send(Message::Text(serde_json::to_string(&ready)?)).await.ok();
+            ws.send(Message::text(serde_json::to_string(&ready)?)).await.ok();
         }
         WorkerToAgent::Deploy {
             deployment_id,
@@ -336,7 +336,7 @@ async fn handle_incoming(
                 let Some(sig_str) = &sig else {
                     warn!("deploy message has no signature but AGENT_SHARED_SECRET is set — rejecting");
                     let _ = ws
-                        .send(Message::Text(
+                        .send(Message::text(
                             r#"{"type":"error","code":"missing_signature"}"#.to_string(),
                         ))
                         .await;
@@ -387,7 +387,7 @@ async fn handle_incoming(
                 if !valid {
                     warn!("HMAC signature verification FAILED for deploy — rejecting");
                     let _ = ws
-                        .send(Message::Text(
+                        .send(Message::text(
                             r#"{"type":"error","code":"invalid_signature"}"#.to_string(),
                         ))
                         .await;
@@ -449,7 +449,7 @@ async fn handle_incoming(
                             error: t.error,
                         }).collect(),
                     };
-                    if let Err(e) = ws.send(Message::Text(serde_json::to_string(&done)?)).await {
+                    if let Err(e) = ws.send(Message::text(serde_json::to_string(&done)?)).await {
                         warn!(error = %e, "failed to send config_apply_done");
                     }
                 }
@@ -468,7 +468,7 @@ async fn handle_incoming(
                             error: Some(format!("parse error: {}", e)),
                         }],
                     };
-                    let _ = ws.send(Message::Text(serde_json::to_string(&err)?)).await;
+                    let _ = ws.send(Message::text(serde_json::to_string(&err)?)).await;
                 }
             }
         }
@@ -917,7 +917,7 @@ async fn drain_serve_logs_to_ws(
                             line: *line_no,
                         };
                         let json = serde_json::to_string(&msg).unwrap();
-                        if let Err(e) = ws.send(Message::Text(json)).await {
+                        if let Err(e) = ws.send(Message::text(json)).await {
                             warn!(error = %e, "ws send failed, stopping forward");
                             break;
                         }
@@ -948,7 +948,7 @@ async fn emit_log(
 		line: *line_no,
 	};
 	let json = serde_json::to_string(&msg).unwrap();
-	if let Err(e) = ws.send(Message::Text(json)).await {
+	if let Err(e) = ws.send(Message::text(json)).await {
 		error!(error = %e, "failed to send log line");
 	}
 	// Best-effort append to the per-deployment JSONL log file. We
@@ -1024,7 +1024,7 @@ async fn emit_done(
         error,
     };
     let json = serde_json::to_string(&msg).unwrap();
-    let _ = ws.send(Message::Text(json)).await;
+    let _ = ws.send(Message::text(json)).await;
 }
 
 async fn run_cmd_streaming(
@@ -1157,7 +1157,7 @@ async fn stream_child_to_ws(
                             line: *line_no,
                         };
                         let json = serde_json::to_string(&msg).unwrap();
-                        if let Err(e) = ws.send(Message::Text(json)).await {
+                        if let Err(e) = ws.send(Message::text(json)).await {
                             warn!(error = %e, "ws send failed, stopping forward");
                             break;
                         }
@@ -1289,6 +1289,7 @@ async fn ensure_cloudflared(
 /// Constant-time compare. Signature format: "v1.<hex>"
 fn verify_hmac_sha256(secret: &str, payload: &str, signature: &str) -> bool {
     use hmac::{Hmac, Mac};
+    use hmac::digest::KeyInit;
     use sha2::Sha256;
 
     let expected_hex = match signature.strip_prefix("v1.") {

@@ -158,19 +158,23 @@ api_servers() {
 # inside the VM, 127.0.0.1 is the VM itself, not the host.
 #
 # We rewrite the api_base in the registration response to point
-# at the host's OrbStack-bridge IP. Detect by parsing the default
-# route advertised to the VM (the gateway IS the host, since
-# OrbStack NATs).
+# at the host's OrbStack-bridge IP. The default gateway (`.1`)
+# is the NAT bridge, not the host — scan reachable neighbors for
+# the one that actually has port $LAB_AGENT_PORT open.
 host_ip_for_vm() {
-	# Run inside the VM, get the default route's gateway IP.
-	# The first column of `ip route show default` is the IP.
-	orb run -m "$LAB_VM_NAME" ip route show default 2>/dev/null \
-		| awk '{print $3; exit}'
+	orb run -m "$LAB_VM_NAME" sh -c '
+		for ip in $(ip neigh show | awk "/REACHABLE/ {print \$1}"); do
+			code=$(curl -s -o /dev/null -w "%{http_code}" \
+				--connect-timeout 1 "http://$ip:'"$LAB_AGENT_PORT"'/health" 2>/dev/null)
+			[ "$code" = "200" ] && echo "$ip" && exit 0
+		done
+	' 2>/dev/null
 }
 
 # Rewrite a registration.json in-place to swap the api_base
 # from 127.0.0.1 (where wrangler dev is bound) to the host IP
-# the VM can actually reach.
+# the VM can actually reach. Also patches the embedded config_toml
+# so it matches the rewritten api_base and server_id.
 rewrite_registration_for_vm() {
 	local host_ip
 	host_ip="$(host_ip_for_vm)"
@@ -178,10 +182,32 @@ rewrite_registration_for_vm() {
 		warn "could not detect host IP from inside the VM; api_base will be 127.0.0.1 (broken)"
 		return 1
 	fi
+	local port="${LAB_AGENT_PORT:-8787}"
+	local sid
+	sid=$(jq -r .server_id "$LAB_REG")
+	local st
+	st=$(jq -r .setup_token "$LAB_REG")
+
 	# /api/servers/register returned wss://127.0.0.1:8787 (or
 	# whatever requestUrl was). Swap host to $host_ip, keep port.
-	local new_api_base
-	new_api_base=$(jq -r .api_base "$LAB_REG" | sed -E "s|://[^:/]+|://$host_ip|")
-	jq --arg n "$new_api_base" '.api_base = $n' "$LAB_REG" > "$LAB_REG.tmp" && mv "$LAB_REG.tmp" "$LAB_REG"
+	local new_api_base="ws://${host_ip}:${port}"
+	local new_config_toml
+	new_config_toml=$(cat <<TOML
+# void-agent config
+# Written by test-lab on $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+api_base = "${new_api_base}"
+server_id = "${sid}"
+setup_token = "${st}"
+state_dir = "/var/lib/void"
+public_url_template = "https://pr-{port}.loca.lt"
+TOML
+)
+
+	jq \
+		--arg api "$new_api_base" \
+		--arg toml "$new_config_toml" \
+		'.api_base = $api | .config_toml = $toml' \
+		"$LAB_REG" > "$LAB_REG.tmp" && mv "$LAB_REG.tmp" "$LAB_REG"
 	ok "rewrote api_base → $new_api_base (host IP from VM's perspective)"
 }

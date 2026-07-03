@@ -68,6 +68,28 @@ if [ ! -f "$LAB_REG" ]; then
 	# is the VM itself, not the host. Rewrite the api_base to
 	# the host's OrbStack-bridge IP that the VM can actually reach.
 	rewrite_registration_for_vm || true
+
+	# Push the new config to the VM and restart the agent.
+	# The VM's /etc/void/config.toml is stale (old server_id,
+	# old setup_token, possibly wrong api_base).
+	log "pushing config to $LAB_VM_NAME and restarting void-agent..."
+	SID_NEW=$(jq -r .server_id "$LAB_REG")
+	ST_NEW=$(jq -r .setup_token "$LAB_REG")
+	AB_NEW=$(jq -r .api_base "$LAB_REG")
+	orb run -m "$LAB_VM_NAME" sudo tee /etc/void/config.toml > /dev/null <<VMCFG
+# void-agent config
+# Written by test-lab/up.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+api_base = "${AB_NEW}"
+server_id = "${SID_NEW}"
+setup_token = "${ST_NEW}"
+state_dir = "/var/lib/void"
+public_url_template = "https://pr-{port}.loca.lt"
+VMCFG
+	# Clear any stale session_token so the agent uses the new setup_token
+	orb run -m "$LAB_VM_NAME" sudo rm -f /var/lib/void/session_token || true
+	orb run -m "$LAB_VM_NAME" sudo systemctl restart void-agent 2>&1 | sed 's/^/  /' || true
+	ok "void-agent restarted on $LAB_VM_NAME (clear old config)"
 fi
 
 # 5. Final status.

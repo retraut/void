@@ -6,10 +6,10 @@ description = "void agent — runs on user VMs, talks to control plane over WebS
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots", "url"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots", "url"] }
 rustls = { version = "0.23", features = ["ring", "std"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-hmac = "0.12"
+hmac = "0.13"
 hex = "0.4"
 libc = "0.2"
 futures-util = "0.3"
@@ -17,18 +17,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
-sha2 = "0.10"
-sysinfo = "0.33"
+sha2 = "0.11"
+sysinfo = "0.39"
 base64 = "0.22"
 ulid = "1"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-toml = "0.8"
-dirs = "5"
+toml = "1.1"
+dirs = "6"
 async-trait = "0.1"
 serde_yaml = "0.9"
-bollard = { version = "0.17", optional = true }
+bollard = { version = "0.18", optional = true }
 
 [features]
 default = []

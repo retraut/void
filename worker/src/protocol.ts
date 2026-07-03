@@ -72,10 +72,21 @@ export const RegisterFrameSchema = z
 		"register: exactly one of setup_token / session_token must be set",
 	);
 
+export const MetricsSchema = z
+	.object({
+		cpu_percent: z.number().min(0).max(100),
+		memory_mb: z.number().nonnegative(),
+		memory_percent: z.number().min(0).max(100),
+	})
+	.strict();
+
+export type Metrics = z.infer<typeof MetricsSchema>;
+
 export const HeartbeatFrameSchema = z
 	.object({
 		type: z.literal("heartbeat"),
 		timestamp: TimestampSchema,
+		metrics: MetricsSchema.optional(),
 	})
 	.strict();
 

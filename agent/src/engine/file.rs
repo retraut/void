@@ -19,7 +19,6 @@ pub struct FileModule {
     group: Option<String>,
     recurse: bool,
     force: bool,
-    follow: bool,
     modification_time: Option<String>,
     access_time: Option<String>,
 }
@@ -138,10 +137,9 @@ impl TaskModule for FileModule {
         let group = params.get("group").and_then(|v| v.as_str()).map(String::from);
         let recurse = params.get("recurse").and_then(|v| v.as_bool()).unwrap_or(false);
         let force = params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
-        let follow = params.get("follow").and_then(|v| v.as_bool()).unwrap_or(true);
         let modification_time = params.get("modification_time").and_then(|v| v.as_str()).map(String::from);
         let access_time = params.get("access_time").and_then(|v| v.as_str()).map(String::from);
-        Ok(FileModule { name, path, state, src, content, template, vars, mode, owner, group, recurse, force, follow, modification_time, access_time })
+        Ok(FileModule { name, path, state, src, content, template, vars, mode, owner, group, recurse, force, modification_time, access_time })
     }
 
     async fn check_state(&self, backend: &dyn SystemBackend) -> Result<bool> {
@@ -217,10 +215,6 @@ impl FileModule {
         }
     }
 
-    fn valid_states() -> &'static [&'static str] {
-        &["absent", "directory", "file", "hard", "link", "touch"]
-    }
-
     async fn check_attr_match(&self, info: &FileInfo) -> Result<bool> {
         if let Some(ref mode) = &self.mode {
             if let Some(ref curr) = &info.mode {
@@ -252,7 +246,7 @@ impl FileModule {
         let current_sha = backend.sha256(&self.path).await.unwrap_or_default();
         let mut h = sha2::Sha256::new();
         h.update(content.as_bytes());
-        let desired = format!("{:x}", h.finalize());
+        let desired = hex::encode(h.finalize());
         Ok(current_sha == desired)
     }
 
@@ -284,9 +278,9 @@ impl FileModule {
             let m = mtime.unwrap_or("preserve");
             let a = atime.unwrap_or("preserve");
             if m != "preserve" || a != "preserve" {
-                let m_ref = if m == "now" { "00" } else { m };
-                let a_ref = if a == "now" { "00" } else { a };
-                backend.execute("touch", &["-t", m_ref, &self.path]).await.ok();
+                let _m_ref = if m == "now" { "00" } else { m };
+                let _a_ref = if a == "now" { "00" } else { a };
+                backend.execute("touch", &["-t", _m_ref, &self.path]).await.ok();
                 changed = true;
             }
         }
@@ -356,7 +350,7 @@ impl FileModule {
         if !info.exists {
             backend.write_file(&self.path, "", self.mode.as_deref()).await?;
         }
-        let attr_changed = self.set_attrs(backend).await?;
+        self.set_attrs(backend).await?;
         Ok(TaskResult { name: self.name.clone(), module: "file", changed: true, output: Some(format!("touched {}", self.path)), error: None })
     }
 
@@ -414,11 +408,11 @@ mod tests {
         let m = mk(&[
             ("path", s("/a/b")), ("state", s("directory")), ("mode", s("0755")),
             ("owner", s("root")), ("group", s("root")), ("recurse", b(true)),
-            ("force", b(true)), ("follow", b(false)),
+            ("force", b(true)),
         ]);
         assert_eq!(m.state, "directory");
         assert_eq!(m.mode.as_deref(), Some("0755"));
-        assert!(m.recurse); assert!(m.force); assert!(!m.follow);
+        assert!(m.recurse); assert!(m.force);
     }
 
     #[test]

@@ -262,7 +262,7 @@ impl AptModule {
             return self.update_cache;
         }
         let stamp = APT_UPDATE_STAMP;
-        let info = backend.stat(stamp).await.ok();
+        let _info = backend.stat(stamp).await.ok();
         // Fallback: check via stat command
         let out = backend.execute("stat", &["-c", "%Y", stamp]).await.ok();
         if let Some(o) = out {
@@ -507,16 +507,15 @@ impl AptModule {
 }
 
 // Policy-rc-d guard: creates /usr/sbin/policy-rc.d before ops, restores after
-struct PolicyGuard<'a> {
-    backend: &'a dyn SystemBackend,
+struct PolicyGuard {
     code: Option<i32>,
     had_backup: bool,
 }
 
-impl<'a> PolicyGuard<'a> {
-    async fn new(backend: &'a dyn SystemBackend, code: Option<i32>) -> Self {
+impl PolicyGuard {
+    async fn new(backend: &dyn SystemBackend, code: Option<i32>) -> Self {
         if code.is_none() {
-            return Self { backend, code: None, had_backup: false };
+            return Self { code: None, had_backup: false };
         }
         let exists = backend.file_exists("/usr/sbin/policy-rc.d").await;
         let had_backup = exists;
@@ -524,14 +523,13 @@ impl<'a> PolicyGuard<'a> {
             let content = format!("#!/bin/sh\nexit {}\n", code.unwrap());
             let _ = backend.write_file("/usr/sbin/policy-rc.d", &content, Some("0755")).await;
         }
-        Self { backend, code, had_backup }
+        Self { code, had_backup }
     }
 }
 
-impl<'a> Drop for PolicyGuard<'a> {
+impl Drop for PolicyGuard {
     fn drop(&mut self) {
         if self.code.is_none() { return; }
-        // Can't do async in Drop, best-effort sync removal
         let path = std::path::Path::new("/usr/sbin/policy-rc.d");
         if !self.had_backup {
             let _ = std::fs::remove_file(path);
@@ -802,7 +800,7 @@ mod tests {
     fn test_policy_guard_noop() {
         // code=None → guard is a no-op
         let mb = crate::engine::backend::MockBackend::new();
-        let guard = PolicyGuard { backend: &mb, code: None, had_backup: false };
+        let guard = PolicyGuard { code: None, had_backup: false };
         drop(guard);
     }
 }

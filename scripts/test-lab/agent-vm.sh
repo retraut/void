@@ -48,11 +48,10 @@ LAB_AGENT_MEM_GIB="${VOID_LAB_MEM_GIB:-2}"
 LAB_VM_BOOT_TIMEOUT_SEC="${LAB_VM_BOOT_TIMEOUT_SEC:-300}" # 5 min
 
 cmd_status() {
-	if orb list 2>/dev/null | awk 'NR>1 && $1 != "" {print $1}' | grep -qx "$LAB_VM_NAME"; then
-		local state
-		state=$(orb list 2>/dev/null | awk -v name="$LAB_VM_NAME" 'NR>1 && $1 == name {print $2}')
-		local ip
-		ip=$(orb -m "$LAB_VM_NAME" ip 2>/dev/null || true)
+	if orb list 2>/dev/null | awk '$1 != "" {print $1}' | grep -qx "$LAB_VM_NAME"; then
+		local state ip
+		state=$(orb list 2>/dev/null | awk -v name="$LAB_VM_NAME" '$1 == name {print $2}')
+		ip=$(orb list 2>/dev/null | awk -v name="$LAB_VM_NAME" '$1 == name {print $8}')
 		printf "  name:   %s\n" "$LAB_VM_NAME"
 		printf "  state:  %s\n" "$state"
 		printf "  ip:     %s\n" "${ip:-<no ip>}"
@@ -169,7 +168,7 @@ cmd_create() {
 	# Sometimes `orb list` shows the VM while it's still booting.
 	log "waiting for $LAB_VM_NAME to reach 'running' state..."
 	while [ $SECONDS -lt $deadline ]; do
-		STATE=$(orb list 2>/dev/null | awk -v name="$LAB_VM_NAME" 'NR>1 && $1 == name {print $2}')
+		STATE=$(orb list 2>/dev/null | awk -v name="$LAB_VM_NAME" '$1 == name {print $2}')
 		if [ "$STATE" = "running" ]; then
 			ok "VM is running"
 			break

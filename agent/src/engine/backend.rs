@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use anyhow::{Context, Result};
 use sha2::{Sha256, Digest};
+#[cfg(test)]
 use std::collections::VecDeque;
+#[cfg(test)]
 use std::sync::Mutex;
 
 #[derive(Debug, Clone)]
@@ -113,7 +115,7 @@ impl SystemBackend for LocalBackend {
             .context(format!("read for sha256 {}", path))?;
         let mut hasher = Sha256::new();
         hasher.update(&data);
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(hex::encode(hasher.finalize()))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -148,22 +150,26 @@ impl SystemBackend for LocalBackend {
     }
 }
 
+#[cfg(test)]
 pub struct MockBackend {
     commands: Mutex<VecDeque<MockCommand>>,
     files: Mutex<std::collections::HashMap<String, MockFile>>,
 }
 
+#[cfg(test)]
 struct MockCommand {
     cmd: String,
     args: Vec<String>,
     output: CommandOutput,
 }
 
+#[cfg(test)]
 struct MockFile {
     content: String,
     mode: Option<String>,
 }
 
+#[cfg(test)]
 impl MockBackend {
     pub fn new() -> Self {
         Self {
@@ -236,7 +242,7 @@ impl SystemBackend for MockBackend {
             .ok_or_else(|| anyhow::anyhow!("mock file not found: {}", path))?;
         let mut hasher = Sha256::new();
         hasher.update(content.content.as_bytes());
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(hex::encode(hasher.finalize()))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -250,7 +256,7 @@ impl SystemBackend for MockBackend {
                     mode: file.mode.clone(),
                     owner: Some("0".into()),
                     group: Some("0".into()),
-                    sha256: Some(format!("{:x}", hasher.finalize())),
+                    sha256: Some(hex::encode(hasher.finalize())),
                 })
             }
             None => Ok(FileInfo {

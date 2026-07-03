@@ -17,7 +17,7 @@
 
 import { Env } from "./env";
 import { timingSafeEqual } from "./auth";
-import { parseAgentFrame, type AgentOutFrame, type WorkerToAgentFrame } from "./protocol";
+import { parseAgentFrame, type AgentOutFrame, type WorkerToAgentFrame, type Metrics } from "./protocol";
 
 export class VoidCell {
 	private state: DurableObjectState;
@@ -27,6 +27,7 @@ export class VoidCell {
 	private serverId: string | null = null;
 	private registered = false;
 	private lastHeartbeat = 0;
+	private latestMetrics: Metrics | null = null;
 	private sseClients: Set<WritableStreamDefaultWriter> = new Set();
 	private logBuffer: Array<{ deployment_id: string; stream: string; data: string; ts: number }> = [];
 
@@ -124,6 +125,14 @@ export class VoidCell {
 				server_id: this.serverId,
 				last_heartbeat: this.lastHeartbeat,
 				log_buffer_size: this.logBuffer.length,
+			});
+		}
+
+		// Internal: latest agent metrics (CPU/memory)
+		if (url.pathname.endsWith("/metrics")) {
+			return Response.json({
+				metrics: this.latestMetrics,
+				last_heartbeat: this.lastHeartbeat,
 			});
 		}
 
@@ -284,6 +293,9 @@ export class VoidCell {
 
 		if (msg.type === "heartbeat") {
 			this.lastHeartbeat = Date.now();
+			if (msg.metrics) {
+				this.latestMetrics = msg.metrics;
+			}
 			return;
 		}
 

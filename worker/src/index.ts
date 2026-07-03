@@ -123,7 +123,8 @@ app.use("/api/*", async (c, next) => {
 		p.startsWith("/api/auth/") ||
 		p.startsWith("/api/webhooks/") ||
 		p.startsWith("/api/passkey/") ||
-		p.startsWith("/api/hetzner/")
+		p.startsWith("/api/hetzner/") ||
+		p === "/api/servers-ui"
 	) return next();
 	return bearerOnly(c, next);
 });
@@ -272,6 +273,7 @@ app.get("/api", (c) => {
 			"GET  /deployments  (UI, session cookie)",
 			"GET  /deployments/:id  (UI, session cookie)",
 			"POST /servers/:id/rotate-session  (UI form action, session cookie)",
+			"GET  /servers/:id/metrics  (UI, session cookie)",
 		],
 	});
 });
@@ -636,6 +638,23 @@ a{color:#6cf;display:inline-block;margin-top:16px}</style></head>
 <div class="warn">The agent has been disconnected. Update <code>&lt;state_dir&gt;/session_token</code> on the agent host with the new token, then restart the agent.</div>
 <a href="/servers">Back to servers</a>
 </div></body></html>`);
+});
+
+// GET /servers/:id/metrics — live agent CPU/memory metrics (session cookie auth)
+app.get("/servers/:id/metrics", requireSession, async (c) => {
+	const serverId = c.req.param("id");
+	const user = c.get("user");
+	const server = await c.env.void_db
+		.prepare("SELECT id FROM servers WHERE id = ? AND user_id = ?")
+		.bind(serverId, user.id)
+		.first<{ id: string }>();
+	if (!server) {
+		return c.json({ error: "server not found" }, 404);
+	}
+	const stub = c.env.void_cell.get(c.env.void_cell.idFromName(serverId));
+	const resp = await stub.fetch(`https://cell/${serverId}/metrics`);
+	const data = await resp.json();
+	return c.json(data);
 });
 
 // POST /servers/:id/delete — full delete (Hetzner + void).

@@ -23,7 +23,7 @@
 	"account_id": "949f5e6ec25888632adcebde03276d07",
 	"name": "void",
 	"main": "src/dev-entry.ts",
-	"compatibility_date": "2026-06-24",
+	"compatibility_date": "2026-05-07",
 	"compatibility_flags": [
 		"nodejs_compat",
 		"global_fetch_strictly_public"
