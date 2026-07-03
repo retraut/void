@@ -220,3 +220,30 @@ jobs:
           name: config-apply-log
           path: /tmp/void-config-apply-test/
           if-no-files-found: ignore
+
+  agent-docker-apply:
+    name: Agent docker config_apply integration test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agent
+      - name: Build void-agent (release, docker feature)
+        run: cargo build --release --features docker
+      - name: Run docker config_apply integration test
+        run: bash ../scripts/test-docker-apply.sh --no-build
+      - name: Upload agent log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-apply-log
+          path: /tmp/void-docker-apply-test/
+          if-no-files-found: ignore

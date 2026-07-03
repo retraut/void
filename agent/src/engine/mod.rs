@@ -5,6 +5,8 @@ pub mod apt;
 pub mod file;
 pub mod systemd;
 pub mod user;
+#[cfg(feature = "docker")]
+pub mod docker;
 
 use std::collections::HashMap;
 use anyhow::{Context, Result};
@@ -30,6 +32,10 @@ impl ModuleRegistry {
         });
         reg.register("user", |name, params| {
             user::UserModule::from_params(name, params).map(|m| Box::new(m) as _)
+        });
+        #[cfg(feature = "docker")]
+        reg.register("docker", |name, params| {
+            docker::DockerModule::from_params(name, params).map(|m| Box::new(m) as _)
         });
         reg
     }

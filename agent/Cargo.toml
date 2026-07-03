@@ -28,6 +28,11 @@ toml = "0.8"
 dirs = "5"
 async-trait = "0.1"
 serde_yaml = "0.9"
+bollard = { version = "0.17", optional = true }
+
+[features]
+default = []
+docker = ["bollard"]
 
 [profile.release]
 opt-level = 3
