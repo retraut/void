@@ -32,12 +32,20 @@ test-backend:
 test-all:
 	cargo test --features docker
 
-# ── Integration tests (need Docker daemon) ──────────────────
-test-integration:
-	../scripts/test-config-apply.sh --no-build
+# ── Integration tests (need OrbStack VM) ────────────────────
+test-integration-apt:
+	../scripts/test-integration-apt.sh
+
+test-integration-file:
+	../scripts/test-integration-file.sh
+
+test-integration-user:
+	../scripts/test-integration-user.sh
 
 test-integration-docker:
-	../scripts/test-docker-apply.sh --no-build
+	../scripts/test-integration-docker.sh
+
+test-integration-all: test-integration-apt test-integration-file test-integration-user test-integration-docker
 
 # ── Build ────────────────────────────────────────────────────
 build:
