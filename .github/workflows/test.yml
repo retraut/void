@@ -210,9 +210,9 @@ jobs:
         with:
           workspaces: agent
       - name: Build void-agent (release)
-        run: cargo build --release
+        run: make build
       - name: Run config_apply integration test
-        run: bash ../scripts/test-config-apply.sh --no-build
+        run: make test-integration
       - name: Upload agent log on failure
         if: failure()
         uses: actions/upload-artifact@v7
