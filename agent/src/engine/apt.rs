@@ -248,8 +248,8 @@ impl AptModule {
         if let Some(ref irecs) = self.install_recommends {
             flags.push(format!("-o APT::Install-Recommends={}", if *irecs { "yes" } else { "no" }));
         }
-        let lock_opt = format!("-o DPkg::Lock::Timeout={}", self.lock_timeout);
-        flags.push(lock_opt);
+        flags.push("-o".to_string());
+        flags.push(format!("DPkg::Lock::Timeout={}", self.lock_timeout));
         flags
     }
 
@@ -720,7 +720,7 @@ mod tests {
         let m = make_module(&[("packages", pkgs(&["x"]))]);
         let flags = m.build_base_flags();
         assert!(flags.contains(&"-y".to_string()));
-        assert!(flags.iter().any(|f| f.contains("DPkg::Lock::Timeout=60")));
+        assert!(flags.iter().any(|f| f == "DPkg::Lock::Timeout=60"));
     }
 
     #[test]
