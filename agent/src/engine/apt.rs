@@ -541,7 +541,7 @@ impl Drop for PolicyGuard {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use crate::engine::backend::CommandOutput;
+    use crate::engine::backend::{MockBackend, CommandOutput};
 
     fn make_module(params: &[(&str, Value)]) -> AptModule {
         let mut m = HashMap::new();
@@ -789,11 +789,18 @@ mod tests {
 
     // ── PolicyGuard ────────────────────────────────────────
 
-    #[test]
-    fn test_policy_guard_noop() {
-        // code=None → guard is a no-op
-        let _mb = crate::engine::backend::MockBackend::new();
-        let guard = PolicyGuard { code: None, had_backup: false };
-        drop(guard);
+    #[tokio::test]
+    async fn test_policy_guard_noop_when_none() {
+        // code=None → guard does nothing
+        let guard = PolicyGuard::new(&MockBackend::new(), None).await;
+        // guard drops, should not panic
+    }
+
+    #[tokio::test]
+    async fn test_policy_guard_creates_file() {
+        let mb = MockBackend::new();
+        let guard = PolicyGuard::new(&mb, Some(101)).await;
+        assert_eq!(guard.code, Some(101));
+        // guard drops, should clean up
     }
 }

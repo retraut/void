@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::sync::Arc;
-use async_trait::async_trait;
 use futures_util::future::join_all;
 use serde::Serialize;
 use tracing::{info, warn};
@@ -210,6 +209,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use anyhow::Result;
+    use async_trait::async_trait;
     use crate::engine::backend::MockBackend;
     use crate::engine::module::TaskModule;
 
@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler_notify() {
+    async fn test_handler_notified_when_task_changed() {
         let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
         let runner = Runner::new(b);
         let pb = Playbook {
@@ -301,8 +301,59 @@ mod tests {
             handlers: vec![Handler { name: "handler1".into(), module: Box::new(PassModule("h1".into())) }],
         };
         let r = runner.run(&pb, RunMode::Apply).await;
-        // "main" changed + ran → notified handler1. handler1 check_state pass → up-to-date
-        // So we get: main changed, handler ok
-        assert_eq!(r.tasks.len(), 2);
+        // "main" is dirty → apply runs → changed=true → notifies "handler1"
+        // "handler1" check_state returns true → up-to-date
+        assert_eq!(r.tasks.len(), 2, "task + handler result");
+        assert!(r.tasks.iter().any(|t| t.name == "main" && t.changed), "task changed");
+        assert!(r.tasks.iter().any(|t| t.name == "h1" && !t.changed), "handler up-to-date");
+    }
+
+    #[tokio::test]
+    async fn test_handler_not_notified_when_task_ok() {
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
+        let runner = Runner::new(b);
+        let pb = Playbook {
+            name: "test".into(),
+            tasks: vec![Task { module: Box::new(PassModule("ok".into())), notify: vec!["handler1".into()], use_become: false, become_user: "root".into() }],
+            handlers: vec![Handler { name: "handler1".into(), module: Box::new(FailModule("h1".into())) }],
+        };
+        let r = runner.run(&pb, RunMode::Apply).await;
+        // "ok" is clean → apply not called → no notify → handler not triggered
+        assert_eq!(r.tasks.len(), 1, "only task, handler not triggered");
+        assert!(!r.tasks.iter().any(|t| t.name == "h1"), "handler absent");
+    }
+
+    #[tokio::test]
+    async fn test_handler_dedup() {
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
+        let runner = Runner::new(b);
+        let pb = Playbook {
+            name: "test".into(),
+            tasks: vec![
+                Task { module: Box::new(FailModule("t1".into())), notify: vec!["h1".into()], use_become: false, become_user: "root".into() },
+                Task { module: Box::new(FailModule("t2".into())), notify: vec!["h1".into()], use_become: false, become_user: "root".into() },
+            ],
+            handlers: vec![Handler { name: "h1".into(), module: Box::new(PassModule("h1".into())) }],
+        };
+        let r = runner.run(&pb, RunMode::Apply).await;
+        let handler_count = r.tasks.iter().filter(|t| t.name == "h1").count();
+        assert_eq!(handler_count, 1, "handler runs once even if notified twice");
+    }
+
+    #[tokio::test]
+    async fn test_handler_order() {
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
+        let runner = Runner::new(b);
+        let pb = Playbook {
+            name: "test".into(),
+            tasks: vec![Task { module: Box::new(FailModule("main".into())), notify: vec!["h2".into(), "h1".into()], use_become: false, become_user: "root".into() }],
+            handlers: vec![
+                Handler { name: "h1".into(), module: Box::new(PassModule("h1".into())) },
+                Handler { name: "h2".into(), module: Box::new(FailModule("h2".into())) },
+            ],
+        };
+        let r = runner.run(&pb, RunMode::Apply).await;
+        let order: Vec<&str> = r.tasks.iter().filter(|t| t.name == "h1" || t.name == "h2").map(|t| t.name.as_str()).collect();
+        assert_eq!(order, vec!["h1", "h2"], "handler order = definition order (Ansible-compatible)");
     }
 }

@@ -510,7 +510,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_apply_idempotent() {
+    async fn test_check_idempotent_after_create() {
         let mb = MockBackend::new();
         mb.expect_exec("id", &["-u", "existing"], CommandOutput { stdout: "1001\n".into(), stderr: String::new(), exit_code: 0 });
         mb.expect_exec("getent", &["passwd", "existing"], CommandOutput { stdout: "existing:x:1001:1001::/home/existing:/bin/bash\n".into(), stderr: String::new(), exit_code: 0 });
