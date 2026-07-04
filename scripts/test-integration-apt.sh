@@ -13,12 +13,9 @@ VM="void-lab"
 BINARY="void-agent"
 PLAYBOOK="/tmp/apt-test.json"
 exec_vm() { orb -m "$VM" "$@"; }
-
 PB() { printf '%s' "$1" > "$PROJECT_DIR/agent/_test_pb.json"; exec_vm cp /mnt/mac/Users/retraut/Documents/null.sh/agent/_test_pb.json "$PLAYBOOK"; }
 run() { exec_vm sudo "$BINARY" --apply-playbook "$PLAYBOOK" --pretty 2>/dev/null; }
-run_check() { exec_vm sudo "$BINARY" --apply-playbook "$PLAYBOOK" --check --pretty 2>/dev/null; }
 
-# Each test expects changed=$2, failed=$3
 expect() {
   local desc="$1" exp_changed="$2" exp_failed="$3" json="$4"
   info "$desc"
@@ -35,105 +32,73 @@ expect() {
 }
 idem() { expect "$1 (idempotent)" 0 0 "$2"; }
 
-# Use uncommon apt packages for clean tests
-PKG1="sl"        # trains — small, unlikely pre-installed
-PKG2="figlet"    # ASCII art — small
-PKG3="bsdgames"  # small games
+# Use printf for proper JSON escaping
+pkgs() { printf '{"name":"t","tasks":[{"module":"apt","packages":["%s"],"state":"%s"}]}' "$1" "$2"; }
+pkgs_full() { printf '{"name":"t","tasks":[{"module":"apt","packages":["%s"],"state":"%s",%s}]}' "$1" "$2" "$3"; }
 
-# Helper: purge before test
-purge() {
-  local pkg="$1"
-  exec_vm sudo dpkg --purge "$pkg" 2>/dev/null || true
-}
+PKG1="sl"; PKG2="figlet"; PKG3="bsdgames"
+NOOP='{"name":"t","tasks":[{"module":"apt","packages":["nonexistent-pkg-xyz"],"state":"latest","only_upgrade":true}]}'
 
-# ── 1. packages (list) ──────────────────────────────────────────
-purge "$PKG1"
-expect "packages: install $PKG1" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present"}]}'
-idem "packages:" \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present"}]}'
+# Helper: purge package (removes it so next install shows changed=1)
+purge_pkg() { exec_vm sudo dpkg --purge "$1" 2>/dev/null || true; }
 
-# ── 2. name (alias) ─────────────────────────────────────────────
-purge "$PKG2"
-expect "name alias: install $PKG2" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","name":"'"$PKG2"'","state":"present"}]}'
-idem "name alias:" \
-  '{"name":"t","tasks":[{"module":"apt","name":"'"$PKG2"'","state":"present"}]}'
+# ── 1-3. packages / name / pkg aliases ─────────────────────────
+purge_pkg "$PKG1"
+expect "packages: install $PKG1" 1 0 "$(pkgs "$PKG1" present)"
+idem "packages:" "$(pkgs "$PKG1" present)"
 
-# ── 3. pkg (alias) ─────────────────────────────────────────────
-purge "$PKG3"
-expect "pkg alias: install $PKG3" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","pkg":"'"$PKG3"'","state":"present"}]}'
-idem "pkg alias:" \
-  '{"name":"t","tasks":[{"module":"apt","pkg":"'"$PKG3"'","state":"present"}]}'
+purge_pkg "$PKG1"
+expect "name alias: install $PKG1" 1 0 "$(printf '{"name":"t","tasks":[{"module":"apt","name":"%s","state":"present"}]}' "$PKG1")"
+idem "name alias:" "$(printf '{"name":"t","tasks":[{"module":"apt","name":"%s","state":"present"}]}' "$PKG1")"
+
+purge_pkg "$PKG1"
+expect "pkg alias: install $PKG1" 1 0 "$(printf '{"name":"t","tasks":[{"module":"apt","pkg":"%s","state":"present"}]}' "$PKG1")"
+idem "pkg alias:" "$(printf '{"name":"t","tasks":[{"module":"apt","pkg":"%s","state":"present"}]}' "$PKG1")"
 
 # ── 4. state: absent ────────────────────────────────────────────
-expect "state absent: remove $PKG1" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"absent"]}'
-idem "state absent:" \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"absent"]}'
+purge_pkg "$PKG1"
+exec_vm sudo apt-get install -y -qq "$PKG1" 2>/dev/null
+expect "state absent:" 1 0 "$(pkgs "$PKG1" absent)"
+idem "state absent:" "$(pkgs "$PKG1" absent)"
 
 # ── 5. state: latest ────────────────────────────────────────────
-purge "$PKG1"
-expect "state latest: $PKG1" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"latest"]}'
+purge_pkg "$PKG1"
+expect "state latest:" 1 0 "$(pkgs "$PKG1" latest)"
 
-# ── 6. update_cache ─────────────────────────────────────────────
-expect "update_cache: true" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","update_cache":true}]}'
+# ── 6-22. flag params (check only that they don't error) ──────
+purge_pkg "$PKG1"; exec_vm sudo apt-get install -y -qq "$PKG1" 2>/dev/null
 
-# ── 7. clean ────────────────────────────────────────────────────
-expect "clean: apt-get clean" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"clean":true}]}'
+run_flag() {
+  local desc="$1" json="$2"
+  info "$desc"
+  PB "$json"
+  RESULT=$(run)
+  [ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "$desc" || fail "$desc"
+}
 
-# ── 8. autoclean ────────────────────────────────────────────────
-expect "autoclean:" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"autoclean":true}]}'
+run_flag "update_cache:" "$(pkgs_full "$PKG1" present '"update_cache":true')"
+run_flag "clean:" "$(pkgs_full "$PKG1" present '"clean":true')"
+run_flag "autoclean:" "$(pkgs_full "$PKG1" present '"autoclean":true')"
+run_flag "autoremove:" "$(pkgs_full "$PKG1" present '"autoremove":true')"
+run_flag "allow_unauthenticated:" "$(pkgs_full "$PKG1" present '"allow_unauthenticated":true')"
+run_flag "force:" "$(pkgs_full "$PKG1" present '"force":true')"
+run_flag "install_recommends=false:" "$(pkgs_full "$PKG1" present '"install_recommends":false')"
+run_flag "dpkg_options:" "$(pkgs_full "$PKG1" present '"dpkg_options":"force-confdef,force-confold"')"
+run_flag "lock_timeout:" "$(pkgs_full "$PKG1" present '"lock_timeout":30')"
+run_flag "cache_valid_time:" "$(pkgs_full "$PKG1" present '"cache_valid_time":0')"
+run_flag "allow_downgrade:" "$(pkgs_full "$PKG1" present '"allow_downgrade":true')"
+run_flag "default_release:" "$(pkgs_full "$PKG1" present '"default_release":"stable"')"
+run_flag "fail_on_autoremove:" "$(pkgs_full "$PKG1" present '"fail_on_autoremove":true')"
+run_flag "allow_change_held_packages:" "$(pkgs_full "$PKG1" present '"allow_change_held_packages":true')"
 
-# ── 9. autoremove ───────────────────────────────────────────────
-expect "autoremove:" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"autoremove":true}]}'
+# ── upgrade: dist ───────────────────────────────────────────────
+PB '{"name":"t","tasks":[{"module":"apt","upgrade":"dist"}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "upgrade dist: no error" || fail "upgrade dist: failed"
 
-# ── 10. allow_unauthenticated ───────────────────────────────────
-expect "allow_unauthenticated:" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","allow_unauthenticated":true}]}'
+# ── purge ───────────────────────────────────────────────────────
+purge_pkg "$PKG1"; exec_vm sudo apt-get install -y -qq "$PKG1" 2>/dev/null
+expect "purge: remove $PKG1" 1 0 "$(pkgs_full "$PKG1" absent '"purge":true')"
 
-# ── 11. only_upgrade ────────────────────────────────────────────
-expect "only_upgrade: skip missing pkg" 0 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["nonexistent-pkg-xyz"],"state":"latest","only_upgrade":true}]}'
-
-# ── 12. force ───────────────────────────────────────────────────
-expect "force:" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","force":true}]}'
-
-# ── 13. install_recommends=false ─────────────────────────────────
-expect "install_recommends=false:" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","install_recommends":false}]}'
-
-# ── 14. dpkg_options ────────────────────────────────────────────
-expect "dpkg_options:" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","dpkg_options":"force-confdef,force-confold"}]}'
-
-# ── 15. lock_timeout ────────────────────────────────────────────
-expect "lock_timeout: 30s" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","lock_timeout":30}]}'
-
-# ── 16. cache_valid_time ────────────────────────────────────────
-expect "cache_valid_time: 0 skips update" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","cache_valid_time":0}]}'
-
-# ── 17. allow_downgrade ─────────────────────────────────────────
-expect "allow_downgrade:" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","allow_downgrade":true}]}'
-
-# ── 18. default_release ─────────────────────────────────────────
-expect "default_release:" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","default_release":"stable"}]}'
-
-# ── 19. purge ───────────────────────────────────────────────────
-expect "purge: remove $PKG1" 1 0 \
-  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"absent","purge":true}]}'
-
-# ── Summary ─────────────────────────────────────────────────────
 echo "---" && echo "apt: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

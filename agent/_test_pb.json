@@ -1,1 +1,1 @@
-{"name":"t","tasks":[{"module":"docker","name":"void-test-ctr-50772","image":"nginx:alpine","state":"absent"}]}
+{"name":"t","tasks":[{"module":"apt","packages":["sl"],"state":"absent","purge":true}]}
