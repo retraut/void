@@ -194,8 +194,8 @@ jobs:
             worker/cloud-init-vitest-results.json
           if-no-files-found: ignore
 
-  agent-config-apply:
-    name: Agent config_apply integration test
+  agent-test:
+    name: Agent unit tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -209,79 +209,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: agent
-      - name: Build void-agent (release)
-        run: make build
-      - name: Run config_apply integration test
-        run: make test-integration
-      - name: Upload agent log on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: config-apply-log
-          path: /tmp/void-config-apply-test/
-          if-no-files-found: ignore
-
-  agent-docker-apply:
-    name: Agent docker config_apply integration test
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: agent
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: agent
-      - name: Build void-agent (release, docker feature)
-        run: cargo build --release --features docker
-      - name: Run docker config_apply integration test
-        run: bash ../scripts/test-docker-apply.sh --no-build
-      - name: Upload agent log on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: docker-apply-log
-          path: /tmp/void-docker-apply-test/
-          if-no-files-found: ignore
-
-  agent-module-tests:
-    name: Agent ${{ matrix.module }} unit tests
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: agent
-    strategy:
-      fail-fast: false
-      matrix:
-        module: [apt, file, user, docker]
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: agent
-      - name: Build (default)
-        if: matrix.module != 'docker'
+      - name: Build void-agent
         run: cargo build
-      - name: Build (docker feature)
-        if: matrix.module == 'docker'
-        run: cargo build --features docker
-      - name: Run ${{ matrix.module }} module tests
-        run: |
-          EXTRA=""
-          [ "${{ matrix.module }}" = "docker" ] && EXTRA="--features docker"
-          cargo test $EXTRA "engine::${{ matrix.module }}::" 2>&1
+      - name: Run unit tests
+        run: cargo test 2>&1
       - name: Upload test log on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: agent-${{ matrix.module }}-test-log
+          name: agent-test-log
           path: agent/target/debug/*.log
           if-no-files-found: ignore

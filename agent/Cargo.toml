@@ -26,13 +26,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 toml = "1.1"
 dirs = "6"
-async-trait = "0.1"
-serde_yaml = "0.9"
-bollard = { version = "0.21", optional = true }
-
-[features]
-default = []
-docker = ["bollard"]
 
 [profile.release]
 opt-level = 3

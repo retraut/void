@@ -13,7 +13,10 @@
 //! receiving side to reject the frame — this is the point.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
+
+fn default_shell_timeout_s() -> u64 {
+    60
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,34 +69,24 @@ pub enum AgentOut {
     },
     #[serde(rename = "ready")]
     Ready { timestamp: u64 },
-    #[serde(rename = "config_apply_done")]
-    ConfigApplyDone {
-        config_id: String,
-        playbook: String,
-        mode: String,
-        summary: ConfigSummary,
-        tasks: Vec<ConfigTaskResult>,
+    #[serde(rename = "shell_done")]
+    ShellDone {
+        task_id: String,
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigSummary {
-    pub ok: u32,
-    pub changed: u32,
-    pub failed: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfigTaskResult {
-    pub name: String,
-    pub module: String,
-    pub changed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    #[serde(rename = "compose_up_done")]
+    ComposeUpDone {
+        task_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        container_id: Option<String>,
+        exit_code: i32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -167,13 +160,28 @@ pub enum WorkerToAgent {
     },
     #[serde(rename = "shutdown")]
     Shutdown {},
-    #[serde(rename = "config_apply")]
-    ConfigApply {
-        config_id: String,
-        playbook: JsonValue,
-        mode: String,
+    /// Run an arbitrary shell command. The Worker is responsible for
+    /// allowlisting/sandboxing this — never expose `shell` to a user
+    /// without an allowlist in front of it.
+    #[serde(rename = "shell")]
+    Shell {
+        task_id: String,
+        cmd: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        sig: Option<String>,
+        cwd: Option<String>,
+        #[serde(default)]
+        env: std::collections::BTreeMap<String, String>,
+        #[serde(default = "default_shell_timeout_s")]
+        timeout_s: u64,
+    },
+    /// Run `docker compose up -d` with the given compose YAML.
+    #[serde(rename = "compose_up")]
+    ComposeUp {
+        task_id: String,
+        project_name: String,
+        yaml: String,
+        #[serde(default)]
+        env: std::collections::BTreeMap<String, String>,
     },
     #[serde(rename = "error")]
     Error {

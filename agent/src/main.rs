@@ -9,7 +9,6 @@
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use serde::Serialize;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -23,8 +22,8 @@ use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValu
 use tracing::{debug, error, info, warn};
 
 mod config;
+mod crypto;
 mod detect;
-mod engine;
 mod keys;
 mod protocol;
 
@@ -83,47 +82,6 @@ async fn main() -> Result<()> {
 				.with(env_filter)
 				.with(fmt::layer().with_writer(std::io::stderr))
 				.init();
-		}
-	}
-
-	// CLI mode: --apply-playbook <file>
-	// Reads a JSON or YAML playbook from file, runs the config_apply engine, prints result, exits.
-	let args: Vec<String> = std::env::args().collect();
-	if let Some(pos) = args.iter().position(|a| a == "--apply-playbook") {
-		if let Some(path) = args.get(pos + 1) {
-			let raw = std::fs::read_to_string(path)
-				.context(format!("reading playbook: {}", path))?;
-			let registry = engine::ModuleRegistry::new();
-			let pb = if path.ends_with(".yml") || path.ends_with(".yaml") {
-				let yaml_val: serde_yaml::Value = serde_yaml::from_str(&raw)
-					.context("parsing YAML playbook")?;
-				let json_val: serde_json::Value = serde_json::to_value(&yaml_val)
-					.context("converting YAML to JSON")?;
-				registry.from_json_value(&json_val)
-					.context("parsing playbook")?
-			} else {
-				registry.from_json_str(&raw)
-					.context("parsing playbook")?
-			};
-			let backend = std::sync::Arc::new(engine::backend::LocalBackend)
-				as std::sync::Arc<dyn engine::backend::SystemBackend>;
-			let runner = engine::runner::Runner::new(backend);
-			let mode = if args.contains(&"--check".to_string()) || args.contains(&"--dry-run".to_string()) {
-				engine::runner::RunMode::Check
-			} else {
-				engine::runner::RunMode::Apply
-			};
-			let result = runner.run(&pb, mode).await;
-			// Serialize with serde_json, respecting --pretty or not
-			if args.contains(&"--pretty".to_string()) {
-				println!("{}", serde_json::to_string_pretty(&result)?);
-			} else {
-				println!("{}", serde_json::to_string(&result)?);
-			}
-			if result.summary.failed > 0 {
-				std::process::exit(1);
-			}
-			return Ok(());
 		}
 	}
 
@@ -244,7 +202,7 @@ async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> Result<()> {
                     memory_percent: sys.used_memory() as f64 / sys.total_memory() as f64 * 100.0,
                 });
                 let hb = AgentOut::Heartbeat {
-                    timestamp: now_ts(),
+                    timestamp: crypto::now_ts(),
                     metrics,
                 };
                 if let Err(e) = ws.send(Message::text(serde_json::to_string(&hb)?)).await {
@@ -323,7 +281,7 @@ async fn handle_incoming(
             return Ok(true);
         }
         WorkerToAgent::Ping {} => {
-            let ready = AgentOut::Ready { timestamp: now_ts() };
+            let ready = AgentOut::Ready { timestamp: crypto::now_ts() };
             ws.send(Message::text(serde_json::to_string(&ready)?)).await.ok();
         }
         WorkerToAgent::Deploy {
@@ -351,48 +309,13 @@ async fn handle_incoming(
                         .await;
                     return Ok(false);
                 };
-                // Reconstruct the payload as the canonical JSON (without sig).
-                // Use a typed struct so the field order matches the Worker's signing.
-                #[derive(Serialize)]
-                #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-                struct DeployNoSig<'a> {
-                    #[serde(rename = "type")]
-                    ty: &'a str,
-                    deployment_id: &'a str,
-                    repo_url: &'a str,
-                    #[serde(rename = "ref")]
-                    ref_: &'a str,
-                    env: &'a std::collections::BTreeMap<String, String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    build_command: &'a Option<String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    serve_command: &'a Option<String>,
-                    port: u16,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    hostname: &'a Option<String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    public_url: &'a Option<String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    tunnel_token: &'a Option<String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    tunnel_id: &'a Option<String>,
-                }
-                let payload = DeployNoSig {
-                    ty: "deploy",
-                    deployment_id: &deployment_id,
-                    repo_url: &repo_url,
-                    ref_: &ref_,
-                    env: &_env,
-                    build_command: &build_command,
-                    serve_command: &serve_command,
-                    port,
-                    hostname: &hostname,
-                    public_url: &public_url,
-                    tunnel_token: &tunnel_token,
-                    tunnel_id: &tunnel_id,
-                };
-                let payload_str = serde_json::to_string(&payload).unwrap_or_default();
-                let valid = verify_hmac_sha256(secret, &payload_str, sig_str);
+                let payload = crypto::DeployNoSig::from_frame(
+                    &deployment_id, &repo_url, &ref_, &_env,
+                    &build_command, &serve_command, port,
+                    &hostname, &public_url, &tunnel_token, &tunnel_id,
+                );
+                let payload_str = payload.canonical_json();
+                let valid = crypto::verify_hmac_sha256(secret, &payload_str, sig_str);
                 if !valid {
                     warn!("HMAC signature verification FAILED for deploy — rejecting");
                     let _ = ws
@@ -422,64 +345,22 @@ async fn handle_incoming(
             )
             .await;
         }
-        WorkerToAgent::ConfigApply {
-            config_id,
-            playbook,
-            mode,
-            sig: _sig,
+        WorkerToAgent::Shell {
+            task_id,
+            cmd,
+            cwd,
+            env,
+            timeout_s,
         } => {
-            info!(config_id = %config_id, mode = %mode, "config_apply requested");
-            let registry = engine::ModuleRegistry::new();
-            match registry.from_json_value(&playbook) {
-                Ok(pb) => {
-                    let backend = std::sync::Arc::new(engine::backend::LocalBackend)
-                        as std::sync::Arc<dyn engine::backend::SystemBackend>;
-                    let runner = engine::runner::Runner::new(backend);
-                    let run_mode = match mode.as_str() {
-                        "check" | "dry_run" => engine::runner::RunMode::Check,
-                        _ => engine::runner::RunMode::Apply,
-                    };
-                    let result = runner.run(&pb, run_mode).await;
-
-                    let done = AgentOut::ConfigApplyDone {
-                        config_id,
-                        playbook: result.playbook,
-                        mode: mode.clone(),
-                        summary: protocol::ConfigSummary {
-                            ok: result.summary.ok,
-                            changed: result.summary.changed,
-                            failed: result.summary.failed,
-                        },
-                        tasks: result.tasks.into_iter().map(|t| protocol::ConfigTaskResult {
-                            name: t.name,
-                            module: t.module.to_string(),
-                            changed: t.changed,
-                            output: t.output,
-                            error: t.error,
-                        }).collect(),
-                    };
-                    if let Err(e) = ws.send(Message::text(serde_json::to_string(&done)?)).await {
-                        warn!(error = %e, "failed to send config_apply_done");
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "failed to parse playbook");
-                    let err = AgentOut::ConfigApplyDone {
-                        config_id,
-                        playbook: String::new(),
-                        mode: mode.clone(),
-                        summary: protocol::ConfigSummary { ok: 0, changed: 0, failed: 1 },
-                        tasks: vec![protocol::ConfigTaskResult {
-                            name: "parse".into(),
-                            module: "playbook".into(),
-                            changed: false,
-                            output: None,
-                            error: Some(format!("parse error: {}", e)),
-                        }],
-                    };
-                    let _ = ws.send(Message::text(serde_json::to_string(&err)?)).await;
-                }
-            }
+            handle_shell(task_id, cmd, cwd, env, timeout_s, ws).await;
+        }
+        WorkerToAgent::ComposeUp {
+            task_id,
+            project_name,
+            yaml,
+            env,
+        } => {
+            handle_compose_up(task_id, project_name, yaml, env, ws).await;
         }
         WorkerToAgent::Shutdown {} => {
             info!("shutdown requested, exiting");
@@ -491,6 +372,165 @@ async fn handle_incoming(
     }
 
     Ok(false)
+}
+
+/// Run an arbitrary shell command. Used for one-off ops like
+/// `apt-get update && unattended-upgrades`. The Worker is responsible
+/// for allowlisting what commands are allowed — this handler does
+/// no validation of its own.
+async fn handle_shell(
+    task_id: String,
+    cmd: String,
+    cwd: Option<String>,
+    env: std::collections::BTreeMap<String, String>,
+    timeout_s: u64,
+    ws: &mut WsStream,
+) {
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(&cmd);
+    if let Some(dir) = &cwd {
+        command.current_dir(dir);
+    }
+    for (k, v) in &env {
+        command.env(k, v);
+    }
+
+    let result = tokio::time::timeout(Duration::from_secs(timeout_s), async {
+        let out = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
+        match out {
+            Ok(o) => AgentOut::ShellDone {
+                task_id: task_id.clone(),
+                exit_code: o.status.code().unwrap_or(-1),
+                stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+                error: None,
+            },
+            Err(e) => AgentOut::ShellDone {
+                task_id: task_id.clone(),
+                exit_code: -1,
+                stdout: String::new(),
+                stderr: String::new(),
+                error: Some(format!("spawn failed: {}", e)),
+            },
+        }
+    })
+    .await;
+
+    let msg = match result {
+        Ok(m) => m,
+        Err(_) => AgentOut::ShellDone {
+            task_id: task_id.clone(),
+            exit_code: -1,
+            stdout: String::new(),
+            stderr: String::new(),
+            error: Some(format!("timeout after {}s", timeout_s)),
+        },
+    };
+    if let Ok(json) = serde_json::to_string(&msg) {
+        let _ = ws.send(Message::text(json)).await;
+    }
+}
+
+/// Write the YAML to a temp file, run `docker compose -p <name> up -d`,
+/// stream the output as Log lines, return the result.
+async fn handle_compose_up(
+    task_id: String,
+    project_name: String,
+    yaml: String,
+    env: std::collections::BTreeMap<String, String>,
+    ws: &mut WsStream,
+) {
+    let deployment_id = format!("compose-{}", &task_id);
+    let mut line_no = 0u32;
+    let tmpdir = std::env::temp_dir().join(format!("void-compose-{}", &task_id));
+    if let Err(e) = std::fs::create_dir_all(&tmpdir) {
+        emit_done(
+            &deployment_id, ws, DeployStatus::Failed, None, None,
+            Some(format!("mkdir failed: {}", e)),
+        ).await;
+        let msg = AgentOut::ComposeUpDone {
+            task_id: task_id.clone(),
+            container_id: None,
+            exit_code: -1,
+            error: Some(format!("mkdir failed: {}", e)),
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = ws.send(Message::text(json)).await;
+        }
+        return;
+    }
+    let compose_path = tmpdir.join("docker-compose.yml");
+    if let Err(e) = std::fs::write(&compose_path, &yaml) {
+        let _ = std::fs::remove_dir_all(&tmpdir);
+        let msg = AgentOut::ComposeUpDone {
+            task_id: task_id.clone(),
+            container_id: None,
+            exit_code: -1,
+            error: Some(format!("write compose file: {}", e)),
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = ws.send(Message::text(json)).await;
+        }
+        return;
+    }
+
+    emit_log(&mut line_no, &deployment_id, ws, LogStream::Stdout,
+        format!("→ docker compose -p {} up -d\n", project_name)).await;
+
+    let mut command = Command::new("docker");
+    command.arg("compose")
+        .arg("-p").arg(&project_name)
+        .arg("-f").arg(&compose_path)
+        .arg("up").arg("-d")
+        .current_dir(&tmpdir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (k, v) in &env {
+        command.env(k, v);
+    }
+
+    let exit = run_cmd_streaming_inner(
+        "docker", &mut command, &deployment_id, &mut line_no, ws,
+    ).await;
+    let _ = std::fs::remove_dir_all(&tmpdir);
+
+    let msg = AgentOut::ComposeUpDone {
+        task_id: task_id.clone(),
+        container_id: None, // Worker can `docker ps` to find it
+        exit_code: exit,
+        error: if exit != 0 { Some(format!("docker compose up exited {}", exit)) } else { None },
+    };
+    if let Ok(json) = serde_json::to_string(&msg) {
+        let _ = ws.send(Message::text(json)).await;
+    }
+}
+
+/// Like `run_cmd_streaming` but takes a pre-built `Command` so callers
+/// can set cwd/env/etc. before spawning.
+async fn run_cmd_streaming_inner(
+    name: &str,
+    command: &mut Command,
+    deployment_id: &str,
+    line_no: &mut u32,
+    ws: &mut WsStream,
+) -> i32 {
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            emit_log(line_no, deployment_id, ws, LogStream::Stderr,
+                format!("spawn {} failed: {}\n", name, e)).await;
+            return -1;
+        }
+    };
+    stream_child_to_ws(&mut child, deployment_id, line_no, ws).await;
+    match child.wait().await {
+        Ok(status) => status.code().unwrap_or(-1),
+        Err(_) => -1,
+    }
 }
 
 #[derive(Debug)]
@@ -514,6 +554,7 @@ struct DeployParams {
 	build_dir: PathBuf,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_deploy(
 	deployment_id: String,
 	repo_url: String,
@@ -835,7 +876,7 @@ async fn run_deploy(
                     &deployment_id,
                     ws,
                     LogStream::Stdout,
-                    format!("→ ensuring cloudflared is running for tunnel...\n"),
+                    "→ ensuring cloudflared is running for tunnel...\n".to_string(),
                 )
                 .await;
                 match ensure_cloudflared(
@@ -993,7 +1034,7 @@ async fn append_to_jsonl_log(
 	// the WS frame, plus a top-level timestamp so the file is useful
 	// offline without a separate index.
 	let record = serde_json::json!({
-		"ts": now_ts(),
+		"ts": crypto::now_ts(),
 		"deployment_id": deployment_id,
 		"line": line_no,
 		"stream": stream,
@@ -1194,13 +1235,6 @@ async fn check_health(url: &str) -> Result<(), String> {
     }
 }
 
-fn now_ts() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-}
-
 /// Ensure cloudflared is running for the given tunnel token. Idempotent:
 /// - kills any previously tracked cloudflared instance (prevents orphan leak)
 /// - if cloudflared is installed, start it in the background
@@ -1294,35 +1328,4 @@ async fn ensure_cloudflared(
     Ok(())
 }
 
-/// Verify HMAC-SHA256 signature of a deploy message.
-/// Constant-time compare. Signature format: "v1.<hex>"
-fn verify_hmac_sha256(secret: &str, payload: &str, signature: &str) -> bool {
-    use hmac::{Hmac, Mac};
-    use hmac::digest::KeyInit;
-    use sha2::Sha256;
 
-    let expected_hex = match signature.strip_prefix("v1.") {
-        Some(h) => h,
-        None => return false,
-    };
-
-    type HmacSha256 = Hmac<Sha256>;
-    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
-        Ok(m) => m,
-        Err(_) => return false,
-    };
-    mac.update(payload.as_bytes());
-    let expected = mac.finalize().into_bytes();
-    let expected_hex_str = hex::encode(expected);
-
-    // Constant-time compare
-    if expected_hex_str.len() != expected_hex.len() {
-        return false;
-    }
-    let diff: u32 = expected_hex_str
-        .bytes()
-        .zip(expected_hex.bytes())
-        .map(|(a, b)| (a ^ b) as u32)
-        .sum();
-    diff == 0
-}

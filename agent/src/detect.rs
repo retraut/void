@@ -100,7 +100,7 @@ fn detect_node(_build_dir: &Path, pkg: &Path) -> Detected {
 
     let port = v
         .get("engines")
-        .and_then(|_| Some(3000))
+        .map(|_| 3000)
         .unwrap_or(3000);
 
     let build_command = if has_build {

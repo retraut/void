@@ -1,1 +1,0 @@
-{"name":"t","tasks":[{"module":"apt","packages":["sl"],"state":"absent","purge":true}]}
