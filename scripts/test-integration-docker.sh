@@ -124,6 +124,41 @@ expect "dns + extra_hosts" 1 0 \
   '{"name":"t","tasks":[{"module":"docker","name":"'"$CID8"'","image":"nginx:alpine","state":"running","dns":["8.8.8.8"],"dns_search":["example.com"],"extra_hosts":["host:127.0.0.1"],"pull":false}]}'
 exec_vm sudo docker rm -f "$CID8" 2>/dev/null || true
 
+# ── 15. working_dir + user + labels ──────────────────────────────
+CID9="void-wdl-$$"
+exec_vm sudo docker rm -f "$CID9" 2>/dev/null || true
+expect "working_dir+user+labels" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID9"'","image":"nginx:alpine","state":"running","working_dir":"/tmp","user":"nobody","labels":{"app":"test"},"pull":false}]}'
+exec_vm sudo docker rm -f "$CID9" 2>/dev/null || true
+
+# ── 16. entrypoint ──────────────────────────────────────────────
+CID10="void-ep-$$"
+exec_vm sudo docker rm -f "$CID10" 2>/dev/null || true
+expect "entrypoint:" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID10"'","image":"nginx:alpine","state":"running","entrypoint":"/bin/sh","pull":false}]}'
+exec_vm sudo docker rm -f "$CID10" 2>/dev/null || true
+
+# ── 17. devices + sysctls + tmpfs + security_opt ─────────────────
+CID11="void-dst-$$"
+exec_vm sudo docker rm -f "$CID11" 2>/dev/null || true
+expect "devices+sysctls+tmpfs" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID11"'","image":"nginx:alpine","state":"running","sysctls":{"net.ipv4.ip_forward":"1"},"security_opt":["no-new-privileges"],"pull":false}]}'
+exec_vm sudo docker rm -f "$CID11" 2>/dev/null || true
+
+# ── 18. stop_signal + stop_timeout + init ────────────────────────
+CID12="void-stp-$$"
+exec_vm sudo docker rm -f "$CID12" 2>/dev/null || true
+expect "stop_signal+timeout+init" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID12"'","image":"nginx:alpine","state":"running","stop_signal":"SIGTERM","stop_timeout":10,"init":true,"pull":false}]}'
+exec_vm sudo docker rm -f "$CID12" 2>/dev/null || true
+
+# ── 19. cpu_quota + cpu_set + memory_reservation ─────────────────
+CID13="void-cq-$$"
+exec_vm sudo docker rm -f "$CID13" 2>/dev/null || true
+expect "cpu_quota+set+memres" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID13"'","image":"nginx:alpine","state":"running","cpu_quota":50000,"cpu_set":"0","memory_reservation":33554432,"pull":false}]}'
+exec_vm sudo docker rm -f "$CID13" 2>/dev/null || true
+
 # ── 15. state: absent ───────────────────────────────────────────
 exec_vm sudo docker run -d --name "$CID" nginx:alpine sleep 5 2>/dev/null || true
 expect "state absent: remove" 1 0 \

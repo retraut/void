@@ -1,1 +1,1 @@
-{"name":"t","tasks":[{"module":"docker","name":"void-test-ctr-49439","image":"nginx:alpine","state":"running","ports":["8080:80"],"pull":true}]}
+{"name":"t","tasks":[{"module":"docker","name":"void-test-ctr-50772","image":"nginx:alpine","state":"absent"}]}
