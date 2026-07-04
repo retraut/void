@@ -1,1 +1,1 @@
-{"name":"t","tasks":[{"module":"file","path":"/tmp/filetest/a.txt","access_time":"now"}]}
+{"name":"t","tasks":[{"module":"docker","name":"void-test-ctr-49439","image":"nginx:alpine","state":"running","ports":["8080:80"],"pull":true}]}

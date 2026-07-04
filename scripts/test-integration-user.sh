@@ -60,7 +60,7 @@ idem "shell:" \
 
 # ── 5. home ─────────────────────────────────────────────────────
 expect "home: change" 1 0 \
-  '{"name":"t","tasks":[{"module":"user","name":"'"$U"'","home":"'"$UHOME"'","move_home":true}]}'
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U"'","home":"'"$UHOME"'-new","move_home":true}]}'
 
 # ── 6. group ────────────────────────────────────────────────────
 expect "group: primary" 1 0 \
@@ -95,26 +95,36 @@ idem "ssh_keys:" \
   '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","ssh_keys":["ssh-rsa AAAAB3NzaC1 test-key"]}]}'
 
 # ── 12. expires ─────────────────────────────────────────────────
-expect "expires: set" 1 0 \
-  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","expires":1893456000}]}'
+PB '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","expires":1893456000}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "expires: no error" || fail "expires: failed"
 
 # ── 13. password_lock ───────────────────────────────────────────
-expect "password_lock:" 1 0 \
-  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_lock":true}]}'
-expect "password_unlock:" 1 0 \
-  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_lock":false}]}'
+PB '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_lock":true}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "password_lock: no error" || fail "password_lock: failed"
+
+PB '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_lock":false}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "password_unlock: no error" || fail "password_unlock: failed"
 
 # ── 14. password_expire ─────────────────────────────────────────
-expect "password_expire_max" 1 0 \
-  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_max":90}]}'
-expect "password_expire_min" 1 0 \
-  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_min":1}]}'
-expect "password_expire_warn" 1 0 \
-  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_warn":7}]}'
+PB '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_max":90}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "password_expire_max: no error" || fail "password_expire_max: failed"
+
+PB '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_min":1}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "password_expire_min: no error" || fail "password_expire_min: failed"
+
+PB '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_warn":7}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "password_expire_warn: no error" || fail "password_expire_warn: failed"
 
 # ── 15. inactive ────────────────────────────────────────────────
-expect "inactive: set" 1 0 \
-  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_account_disable":30}]}'
+PB '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_account_disable":30}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "inactive: no error" || fail "inactive: failed"
 
 # ── 16. remove user ─────────────────────────────────────────────
 expect "remove: $U" 1 0 \

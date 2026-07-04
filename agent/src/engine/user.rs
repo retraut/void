@@ -115,47 +115,35 @@ impl TaskModule for UserModule {
 
     async fn check_state(&self, backend: &dyn SystemBackend) -> Result<bool> {
         let exists = self.user_exists(backend).await;
-
-        if self.state == "absent" {
-            return Ok(!exists);
-        }
+        if self.state == "absent" { return Ok(!exists); }
         if !exists { return Ok(false); }
 
-        // Check attributes
-        if let Some(ref shell) = &self.shell {
-            let info = self.getent_passwd(backend).await;
-            if let Some(fields) = info {
-                if fields.get(6).map(|s| s.as_str()) != Some(shell.as_str()) {
-                    return Ok(false);
-                }
-            }
+        let info = self.getent_passwd(backend).await;
+        let pw = info.as_ref();
+
+        if let Some(uid) = self.uid {
+            if pw.and_then(|f| f.get(2)).and_then(|s| s.parse::<u32>().ok()) != Some(uid) { return Ok(false); }
         }
-        if let Some(ref group) = &self.group {
+        if let Some(ref comment) = self.comment {
+            if pw.map(|f| f.get(4).map(|s| s.as_str())).flatten() != Some(comment.as_str()) { return Ok(false); }
+        }
+        if let Some(ref shell) = self.shell {
+            if pw.map(|f| f.get(6).map(|s| s.as_str())).flatten() != Some(shell.as_str()) { return Ok(false); }
+        }
+        if let Some(ref home) = self.home {
+            if pw.map(|f| f.get(5).map(|s| s.as_str())).flatten() != Some(home.as_str()) { return Ok(false); }
+        }
+        if let Some(ref group) = self.group {
             let gid = self.resolve_group(backend, group).await;
-            let info = self.getent_passwd(backend).await;
-            if let (Some(gid), Some(fields)) = (gid, &info) {
-                if fields.get(3).and_then(|s| s.parse::<u32>().ok()) != Some(gid) {
-                    return Ok(false);
-                }
-            }
+            if pw.map(|f| f.get(3).and_then(|s| s.parse::<u32>().ok())).flatten() != gid { return Ok(false); }
         }
-        if !self.groups.is_empty() && !self.append {
-            // With append=false (default Ansible behavior), check user is ONLY in given groups
+        if !self.groups.is_empty() {
             let ug = self.user_groups(backend).await;
-            for g in &self.groups {
-                if !ug.contains(g) { return Ok(false); }
-            }
-        } else if !self.groups.is_empty() && self.append {
-            let ug = self.user_groups(backend).await;
-            for g in &self.groups {
-                if !ug.contains(g) { return Ok(false); }
-            }
+            for g in &self.groups { if !ug.contains(g) { return Ok(false); } }
         }
         if !self.ssh_keys.is_empty() {
             let keys = self.read_ssh_keys(backend).await;
-            for key in &self.ssh_keys {
-                if !keys.iter().any(|k| k == key.trim()) { return Ok(false); }
-            }
+            for key in &self.ssh_keys { if !keys.iter().any(|k| k == key.trim()) { return Ok(false); } }
         }
         Ok(true)
     }
