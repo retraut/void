@@ -41,6 +41,7 @@ run_fail() {
 }
 
 TMP="/tmp/filetest"
+exec_vm rm -rf "$TMP"
 exec_vm mkdir -p "$TMP"
 
 # ── 1. path ─────────────────────────────────────────────────────
@@ -54,7 +55,7 @@ expect "dest alias: write" 1 0 \
   '{"name":"t","tasks":[{"module":"file","dest":"'"$TMP"'/b.txt","content":"world"}]}'
 
 # ── 3. content ──────────────────────────────────────────────────
-expect "content: different content" 1 0 \
+expect "content: change existing" 1 0 \
   '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/a.txt","content":"changed content"}]}'
 
 # ── 4. state: absent ────────────────────────────────────────────
@@ -100,16 +101,30 @@ expect "mode symbolic: u=rw,g=r,o=r" 1 0 \
   '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/a.txt","mode":"u=rw,g=r,o=r"}]}'
 
 # ── 11. owner ───────────────────────────────────────────────────
-expect "owner: root" 1 0 \
-  '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/a.txt","owner":"root"}]}'
+expect "owner: daemon" 1 0 \
+  '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/a.txt","owner":"daemon"}]}'
 
 # ── 12. group ───────────────────────────────────────────────────
-expect "group: root" 1 0 \
-  '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/a.txt","group":"root"}]}'
+expect "group: daemon" 1 0 \
+  '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/a.txt","group":"daemon"}]}'
 
 # ── 13. force ───────────────────────────────────────────────────
 expect "force: overwrite link" 1 0 \
   '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/overwrite-link","src":"'"$TMP"'/link-target.txt","state":"link","force":true}]}'
+
+# ── 14. template + vars ─────────────────────────────────────────
+expect "template + vars" 1 0 \
+  '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/rendered.txt","template":"Hello {{ name }}!","vars":{"name":"world"}}]}'
+
+# ── 15. modification_time ───────────────────────────────────────
+PB '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/a.txt","modification_time":"now"}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "modification_time: no error" || fail "modification_time: failed"
+
+# ── 16. access_time ─────────────────────────────────────────────
+PB '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/a.txt","access_time":"now"}]}'
+RESULT=$(run)
+[ "$(echo "$RESULT" | jq -r '.summary.failed')" = "0" ] && pass "access_time: no error" || fail "access_time: failed"
 
 # ── Summary ─────────────────────────────────────────────────────
 echo "---"

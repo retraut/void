@@ -180,7 +180,9 @@ impl TaskModule for FileModule {
             }
             _ => {
                 if curr == "absent" { return Ok(false); }
-                self.check_content_match(backend).await?;
+                if !self.check_content_match(backend).await? {
+                    return Ok(false);
+                }
                 self.check_attr_match(&info).await
             }
         }

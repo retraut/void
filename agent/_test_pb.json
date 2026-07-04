@@ -1,1 +1,1 @@
-{"name":"t","tasks":[{"module":"apt","packages":["sl"],"state":"absent"}]}
+{"name":"t","tasks":[{"module":"file","path":"/tmp/filetest/a.txt","access_time":"now"}]}

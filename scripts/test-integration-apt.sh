@@ -119,14 +119,18 @@ expect "lock_timeout: 30s" 1 0 \
   '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","lock_timeout":30}]}'
 
 # ── 16. cache_valid_time ────────────────────────────────────────
-expect "cache_valid_time:" 1 0 \
+expect "cache_valid_time: 0 skips update" 1 0 \
   '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","cache_valid_time":0}]}'
 
 # ── 17. allow_downgrade ─────────────────────────────────────────
 expect "allow_downgrade:" 1 0 \
   '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","allow_downgrade":true}]}'
 
-# ── 18. purge ───────────────────────────────────────────────────
+# ── 18. default_release ─────────────────────────────────────────
+expect "default_release:" 1 0 \
+  '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"present","default_release":"stable"}]}'
+
+# ── 19. purge ───────────────────────────────────────────────────
 expect "purge: remove $PKG1" 1 0 \
   '{"name":"t","tasks":[{"module":"apt","packages":["'"$PKG1"'"],"state":"absent","purge":true}]}'
 

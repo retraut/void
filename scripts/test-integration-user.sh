@@ -78,11 +78,50 @@ expect "system: create" 1 0 \
 idem "system:" \
   '{"name":"t","tasks":[{"module":"user","name":"'"$USYS"'","system":true}]}'
 
-# ── 9. remove user ──────────────────────────────────────────────
+# ── 9. remove system user ──────────────────────────────────────
+expect "remove sysuser: $USYS" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$USYS"'","state":"absent","remove":true}]}'
+
+# ── 10. password ────────────────────────────────────────────────
+U2="pwuser${RANDOM}"
+exec_vm sudo userdel -rf "$U2" 2>/dev/null || true
+expect "password: set" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password":"$6$xyz$abc123","create_home":false}]}'
+
+# ── 11. ssh_keys ────────────────────────────────────────────────
+expect "ssh_keys: add" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","ssh_keys":["ssh-rsa AAAAB3NzaC1 test-key"]}]}'
+idem "ssh_keys:" \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","ssh_keys":["ssh-rsa AAAAB3NzaC1 test-key"]}]}'
+
+# ── 12. expires ─────────────────────────────────────────────────
+expect "expires: set" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","expires":1893456000}]}'
+
+# ── 13. password_lock ───────────────────────────────────────────
+expect "password_lock:" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_lock":true}]}'
+expect "password_unlock:" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_lock":false}]}'
+
+# ── 14. password_expire ─────────────────────────────────────────
+expect "password_expire_max" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_max":90}]}'
+expect "password_expire_min" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_min":1}]}'
+expect "password_expire_warn" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_warn":7}]}'
+
+# ── 15. inactive ────────────────────────────────────────────────
+expect "inactive: set" 1 0 \
+  '{"name":"t","tasks":[{"module":"user","name":"'"$U2"'","password_expire_account_disable":30}]}'
+
+# ── 16. remove user ─────────────────────────────────────────────
 expect "remove: $U" 1 0 \
   '{"name":"t","tasks":[{"module":"user","name":"'"$U"'","state":"absent","remove":true}]}'
 idem "remove:" \
   '{"name":"t","tasks":[{"module":"user","name":"'"$U"'","state":"absent"}]}'
+exec_vm sudo userdel -rf "$U2" 2>/dev/null || true
 
 # ── Summary ─────────────────────────────────────────────────────
 echo "---"

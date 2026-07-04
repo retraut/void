@@ -74,7 +74,57 @@ expect "state stopped: stop container" 1 0 \
   '{"name":"t","tasks":[{"module":"docker","name":"'"$CID"'","image":"nginx:alpine","state":"stopped"}]}'
 exec_vm sudo docker rm -f "$CID" 2>/dev/null || true
 
-# ── 8. state: absent ────────────────────────────────────────────
+# ── 8. volumes ──────────────────────────────────────────────────
+CID2="void-vol-$$"
+exec_vm sudo docker rm -f "$CID2" 2>/dev/null || true
+exec_vm sh -c "echo test > /tmp/voltest.txt"
+expect "volumes: bind mount" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID2"'","image":"nginx:alpine","state":"running","volumes":["/tmp/voltest.txt:/tmp/data.txt"],"pull":false}]}'
+exec_vm sudo docker rm -f "$CID2" 2>/dev/null || true
+
+# ── 9. command ──────────────────────────────────────────────────
+CID3="void-cmd-$$"
+exec_vm sudo docker rm -f "$CID3" 2>/dev/null || true
+expect "command: override" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID3"'","image":"nginx:alpine","state":"running","command":"sleep 999","pull":false}]}'
+exec_vm sudo docker rm -f "$CID3" 2>/dev/null || true
+
+# ── 10. cap_add + cap_drop ──────────────────────────────────────
+CID4="void-cap-$$"
+exec_vm sudo docker rm -f "$CID4" 2>/dev/null || true
+expect "cap_add/drop" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID4"'","image":"nginx:alpine","state":"running","cap_add":["NET_ADMIN"],"cap_drop":["ALL"],"pull":false}]}'
+exec_vm sudo docker rm -f "$CID4" 2>/dev/null || true
+
+# ── 11. healthcheck ─────────────────────────────────────────────
+CID5="void-hc-$$"
+exec_vm sudo docker rm -f "$CID5" 2>/dev/null || true
+expect "healthcheck:" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID5"'","image":"nginx:alpine","state":"running","healthcheck_test":["CMD","echo","ok"],"healthcheck_interval":300,"healthcheck_retries":2,"pull":false}]}'
+exec_vm sudo docker rm -f "$CID5" 2>/dev/null || true
+
+# ── 12. memory limit + cpu shares ────────────────────────────────
+CID6="void-mem-$$"
+exec_vm sudo docker rm -f "$CID6" 2>/dev/null || true
+expect "memory + cpu" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID6"'","image":"nginx:alpine","state":"running","memory":67108864,"memory_swap":134217728,"cpu_shares":512,"pull":false}]}'
+exec_vm sudo docker rm -f "$CID6" 2>/dev/null || true
+
+# ── 13. network_mode ────────────────────────────────────────────
+CID7="void-net-$$"
+exec_vm sudo docker rm -f "$CID7" 2>/dev/null || true
+expect "network_mode: host" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID7"'","image":"nginx:alpine","state":"running","network_mode":"host","pull":false}]}'
+exec_vm sudo docker rm -f "$CID7" 2>/dev/null || true
+
+# ── 14. dns + dns_search + extra_hosts ──────────────────────────
+CID8="void-dns-$$"
+exec_vm sudo docker rm -f "$CID8" 2>/dev/null || true
+expect "dns + extra_hosts" 1 0 \
+  '{"name":"t","tasks":[{"module":"docker","name":"'"$CID8"'","image":"nginx:alpine","state":"running","dns":["8.8.8.8"],"dns_search":["example.com"],"extra_hosts":["host:127.0.0.1"],"pull":false}]}'
+exec_vm sudo docker rm -f "$CID8" 2>/dev/null || true
+
+# ── 15. state: absent ───────────────────────────────────────────
 exec_vm sudo docker run -d --name "$CID" nginx:alpine sleep 5 2>/dev/null || true
 expect "state absent: remove" 1 0 \
   '{"name":"t","tasks":[{"module":"docker","name":"'"$CID"'","image":"nginx:alpine","state":"absent"}]}'
