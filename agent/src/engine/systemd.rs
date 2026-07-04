@@ -132,8 +132,6 @@ mod tests {
         assert!(m.daemon_reload);
     }
 
-    fn mk_backend() -> Arc<dyn SystemBackend> { Arc::new(MockBackend::new()) }
-
     #[tokio::test]
     async fn test_check_active() {
         let mock = MockBackend::new();
