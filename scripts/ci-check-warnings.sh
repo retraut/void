@@ -32,7 +32,7 @@ with open('/tmp/ci-raw.log') as f:
         if 'Finished `test` profile' in line or 'Finished `dev` profile' in line or 'Finished `release` profile' in line:
             in_cargo = False
         # warnings only from cargo build/test output
-        if 'warning:' in line.lower() and 'node:' not in line and 'punycode' not in line and 'hint:' not in line and 'Deprecation' not in line and 'generated' not in line and 'Use \`node' not in line:
+        if 'warning:' in line.lower() and 'node:' not in line and 'punycode' not in line and 'hint:' not in line and 'Deprecation' not in line and 'generated' not in line and 'Use' not in line:
             if not in_cargo and 'Running unittests' not in line:
                 continue  # skip non-cargo warnings
             clean_line = re.sub(r'2026-\d+-\d+T\d+:\d+:\d+\.\d+Z\s+', '', line)
@@ -80,13 +80,13 @@ PYEOF
 echo ""
 echo "=== Summary of warning lines ==="
 python3 << 'PYEOF'
-import re
+import re, sys
 with open('/tmp/ci-raw.log') as f:
     text = f.read()
     clean = re.sub(r'\x1b\[[0-9;]*m', '', text)
     all_warnings = []
     for line in clean.split('\n'):
-        if 'warning:' in line.lower() and 'node:' not in line and 'punycode' not in line and 'hint:' not in line and 'Deprecation' not in line and 'Use \`node' not in line and 'generated' not in line:
+        if 'warning:' in line.lower() and 'node:' not in line and 'punycode' not in line and 'hint:' not in line and 'Deprecation' not in line and 'Use' not in line and 'generated' not in line:
             clean_line = re.sub(r'2026-\d+-\d+T\d+:\d+:\d+\.\d+Z\s+', '', line)
             clean_line = re.sub(r'[A-Za-z0-9._-]+\t[A-Za-z0-9._ -]+\t', '', clean_line).strip()
             if clean_line:

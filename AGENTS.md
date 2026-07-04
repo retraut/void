@@ -39,9 +39,8 @@
 - After every push, watch CI with a polling loop, not a subagent.
 - Use `rtk gh run list -w test -L 3 --json headSha,databaseId` to find run by commit SHA.
 - Use `rtk gh run watch <id>` to wait for completion.
-- Use `rtk gh run view <id> --log > /tmp/ci.log` + `grep "warning:" /tmp/ci.log` to check ALL warnings.
-- Strip ANSI codes with python3 before grepping.
-- Check warnings in BOTH build and test output.
+- Use `scripts/ci-check-warnings.sh [run_id]` to check ALL warnings (build + test output).
+- Runs `rtk gh run view <id> --log`, strips ANSI codes, greps for `warning:`.
 
 ### Definition of Done
 - `cargo check` passes with 0 errors, 0 warnings
