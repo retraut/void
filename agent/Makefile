@@ -36,9 +36,6 @@ test-all:
 test-integration:
 	../scripts/test-config-apply.sh --no-build
 
-test-integration-docker:
-	../scripts/test-docker-apply.sh --no-build
-
 # ── Comprehensive integration tests (need OrbStack VM) ──────
 test-integration-apt:
 	../scripts/test-integration-apt.sh
