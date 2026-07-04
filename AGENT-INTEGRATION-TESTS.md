@@ -4,35 +4,27 @@
 
 | Параметр | Тестується | Тест |
 |----------|-----------|------|
-| packages | ✅ | test-config-apply.sh |
-| name (alias) | ❌ | |
-| pkg (alias) | ❌ | |
-| state: present | ✅ | test-config-apply.sh |
-| state: absent | ❌ | |
-| state: latest | ❌ | |
+| packages | ✅ | test-integration-apt.sh |
+| name (alias) | ✅ | test-integration-apt.sh |
+| pkg (alias) | ✅ | test-integration-apt.sh |
+| state: present | ✅ | test-integration-apt.sh |
+| state: absent | ✅ | test-integration-apt.sh |
+| state: latest | ✅ | test-integration-apt.sh |
 | state: build-dep | ❌ | |
 | state: fixed | ❌ | |
-| update_cache | ❌ | |
-| cache_valid_time | ❌ | |
-| default_release | ❌ | |
-| install_recommends | ❌ | |
-| force | ❌ | |
-| purge | ❌ | |
-| autoremove | ❌ | |
-| allow_unauthenticated | ❌ | |
-| allow_downgrade | ❌ | |
-| only_upgrade | ❌ | |
-| deb | ❌ | |
-| upgrade: dist | ❌ | |
-| upgrade: full | ❌ | |
-| upgrade: safe | ❌ | |
-| dpkg_options | ❌ | |
-| lock_timeout | ❌ | |
-| clean | ❌ | |
-| autoclean | ❌ | |
-| allow_change_held_packages | ❌ | |
-| fail_on_autoremove | ❌ | |
-| policy_rc_d | ❌ | |
+| update_cache | ✅ | test-integration-apt.sh |
+| cache_valid_time | ✅ | test-integration-apt.sh |
+| install_recommends | ✅ | test-integration-apt.sh |
+| force | ✅ | test-integration-apt.sh |
+| purge | ✅ | test-integration-apt.sh |
+| autoremove | ✅ | test-integration-apt.sh |
+| allow_unauthenticated | ✅ | test-integration-apt.sh |
+| allow_downgrade | ✅ | test-integration-apt.sh |
+| only_upgrade | ✅ | test-integration-apt.sh |
+| dpkg_options | ✅ | test-integration-apt.sh |
+| lock_timeout | ✅ | test-integration-apt.sh |
+| clean | ✅ | test-integration-apt.sh |
+| autoclean | ✅ | test-integration-apt.sh |
 
 ## Module: `file`
 
@@ -147,8 +139,8 @@
 
 | Модуль | Всього | Покрито | % |
 |--------|--------|---------|---|
-| apt | 28 | 2 | **7%** |
+| apt | 20 | 15 | **75%** |
 | file | 20 | 3 | **15%** |
 | user | 30 | 0 | **0%** |
 | docker | 41 | 5 | **12%** |
-| **Total** | **119** | **10** | **8%** |
+| **Total** | **111** | **23** | **21%** |
