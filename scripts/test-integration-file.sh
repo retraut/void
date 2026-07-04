@@ -9,11 +9,18 @@ pass() { PASS=$((PASS+1)); echo "$OK $1"; }
 fail() { FAIL=$((FAIL+1)); echo "$NO $1"; }
 info() { echo "$INFO $1"; }
 
-VM="void-lab"
+VM="${VOID_TEST_VM:-void-lab}"
 BINARY="void-agent"
 PLAYBOOK="/tmp/file-test.json"
 exec_vm() { orb -m "$VM" "$@"; }
-PB() { printf '%s' "$1" > "$PROJECT_DIR/agent/_test_pb.json"; exec_vm cp /mnt/mac/Users/retraut/Documents/null.sh/agent/_test_pb.json "$PLAYBOOK"; }
+PB() {
+  local fname="void-test-$$-$RANDOM.json"
+  local local_path="$PROJECT_DIR/agent/$fname"
+  local vm_path="/mnt/mac$PROJECT_DIR/agent/$fname"
+  printf '%s' "$1" > "$local_path"
+  exec_vm cp "$vm_path" "$PLAYBOOK"
+  rm -f "$local_path"
+}
 run() { exec_vm sudo "$BINARY" --apply-playbook "$PLAYBOOK" --pretty 2>/dev/null; }
 
 expect() {
@@ -59,7 +66,7 @@ expect "content: change existing" 1 0 \
   '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/a.txt","content":"changed content"}]}'
 
 # ── 4. state: absent ────────────────────────────────────────────
-echo "test" > "$PROJECT_DIR/agent/_test_pb.json"; exec_vm cp /mnt/mac/Users/retraut/Documents/null.sh/agent/_test_pb.json "$TMP/delete-me.txt"
+echo "test" > "$PROJECT_DIR/agent/_void-del.json"; exec_vm cp /mnt/mac"$PROJECT_DIR"/agent/_void-del.json "$TMP/delete-me.txt"; rm -f "$PROJECT_DIR/agent/_void-del.json"
 expect "state absent: remove file" 1 0 \
   '{"name":"t","tasks":[{"module":"file","path":"'"$TMP"'/delete-me.txt","state":"absent"}]}'
 idem "state absent:" \

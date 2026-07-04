@@ -9,11 +9,18 @@ pass() { PASS=$((PASS+1)); echo "$OK $1"; }
 fail() { FAIL=$((FAIL+1)); echo "$NO $1"; }
 info() { echo "$INFO $1"; }
 
-VM="void-lab"
+VM="${VOID_TEST_VM:-void-lab}"
 BINARY="void-agent"
 PLAYBOOK="/tmp/docker-test.json"
 exec_vm() { orb -m "$VM" "$@"; }
-PB() { printf '%s' "$1" > "$PROJECT_DIR/agent/_test_pb.json"; exec_vm cp /mnt/mac/Users/retraut/Documents/null.sh/agent/_test_pb.json "$PLAYBOOK"; }
+PB() {
+  local fname="void-test-$$-$RANDOM.json"
+  local local_path="$PROJECT_DIR/agent/$fname"
+  local vm_path="/mnt/mac$PROJECT_DIR/agent/$fname"
+  printf '%s' "$1" > "$local_path"
+  exec_vm cp "$vm_path" "$PLAYBOOK"
+  rm -f "$local_path"
+}
 run() { exec_vm sudo "$BINARY" --apply-playbook "$PLAYBOOK" --pretty 2>/dev/null; }
 
 expect() {
