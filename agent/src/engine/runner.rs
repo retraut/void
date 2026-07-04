@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
+use async_trait::async_trait;
 use futures_util::future::join_all;
 use serde::Serialize;
 use tracing::{info, warn};
@@ -201,5 +202,107 @@ impl Runner {
             },
             tasks: all,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use anyhow::Result;
+    use crate::engine::backend::MockBackend;
+    use crate::engine::module::TaskModule;
+
+    struct PassModule(String);
+    struct FailModule(String);
+
+    #[async_trait]
+    impl TaskModule for PassModule {
+        fn module_name(&self) -> &'static str { "pass" }
+        fn task_name(&self) -> &str { &self.0 }
+        fn from_params(_: String, _: &std::collections::HashMap<String, serde_json::Value>) -> Result<Self> { unimplemented!() }
+        async fn check_state(&self, _: &dyn SystemBackend) -> Result<bool> { Ok(true) }
+        async fn apply_changes(&self, _: &dyn SystemBackend) -> Result<TaskResult> {
+            Ok(TaskResult { name: self.0.clone(), module: "pass", changed: false, output: None, error: None })
+        }
+    }
+
+    #[async_trait]
+    impl TaskModule for FailModule {
+        fn module_name(&self) -> &'static str { "fail" }
+        fn task_name(&self) -> &str { &self.0 }
+        fn from_params(_: String, _: &std::collections::HashMap<String, serde_json::Value>) -> Result<Self> { unimplemented!() }
+        async fn check_state(&self, _: &dyn SystemBackend) -> Result<bool> { Ok(false) }
+        async fn apply_changes(&self, _: &dyn SystemBackend) -> Result<TaskResult> {
+            Ok(TaskResult { name: self.0.clone(), module: "fail", changed: true, output: None, error: None })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_empty_playbook() {
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
+        let runner = Runner::new(b);
+        let pb = Playbook { name: "empty".into(), tasks: vec![], handlers: vec![] };
+        let r = runner.run(&pb, RunMode::Apply).await;
+        assert_eq!(r.summary.ok, 0);
+        assert_eq!(r.summary.failed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_all_ok() {
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
+        let runner = Runner::new(b);
+        let pb = Playbook {
+            name: "test".into(),
+            tasks: vec![Task { module: Box::new(PassModule("ok1".into())), notify: vec![], use_become: false, become_user: "root".into() }],
+            handlers: vec![],
+        };
+        let r = runner.run(&pb, RunMode::Apply).await;
+        assert_eq!(r.summary.ok, 1);
+        assert_eq!(r.summary.changed, 0);
+        assert_eq!(r.summary.failed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_dirty_task_apply() {
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
+        let runner = Runner::new(b);
+        let pb = Playbook {
+            name: "test".into(),
+            tasks: vec![Task { module: Box::new(FailModule("dirty".into())), notify: vec![], use_become: false, become_user: "root".into() }],
+            handlers: vec![],
+        };
+        let r = runner.run(&pb, RunMode::Apply).await;
+        assert_eq!(r.summary.changed, 1);
+        assert_eq!(r.summary.ok, 0);
+    }
+
+    #[tokio::test]
+    async fn test_check_mode() {
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
+        let runner = Runner::new(b);
+        let pb = Playbook {
+            name: "test".into(),
+            tasks: vec![Task { module: Box::new(FailModule("dirty".into())), notify: vec![], use_become: false, become_user: "root".into() }],
+            handlers: vec![],
+        };
+        let r = runner.run(&pb, RunMode::Check).await;
+        assert_eq!(r.summary.changed, 1); // dry-run shows what WOULD change
+        assert_eq!(r.mode, RunMode::Check);
+    }
+
+    #[tokio::test]
+    async fn test_handler_notify() {
+        let b: Arc<dyn SystemBackend> = Arc::new(MockBackend::new());
+        let runner = Runner::new(b);
+        let pb = Playbook {
+            name: "test".into(),
+            tasks: vec![Task { module: Box::new(FailModule("main".into())), notify: vec!["handler1".into()], use_become: false, become_user: "root".into() }],
+            handlers: vec![Handler { name: "handler1".into(), module: Box::new(PassModule("h1".into())) }],
+        };
+        let r = runner.run(&pb, RunMode::Apply).await;
+        // "main" changed + ran → notified handler1. handler1 check_state pass → up-to-date
+        // So we get: main changed, handler ok
+        assert_eq!(r.tasks.len(), 2);
     }
 }

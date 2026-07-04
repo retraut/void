@@ -102,3 +102,125 @@ impl TaskModule for SystemdModule {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use crate::engine::backend::{MockBackend, CommandOutput};
+
+    fn mk(params: &[(&str, Value)]) -> SystemdModule {
+        let mut m = HashMap::new();
+        for (k, v) in params { m.insert(k.to_string(), v.clone()); }
+        SystemdModule::from_params("test".into(), &m).expect("from_params")
+    }
+    fn val(v: &str) -> Value { Value::String(v.into()) }
+    fn flag(v: bool) -> Value { Value::Bool(v) }
+
+    #[test]
+    fn test_from_params_minimal() {
+        let m = mk(&[("service", val("nginx"))]);
+        assert_eq!(m.service, "nginx");
+        assert_eq!(m.state, "started");
+    }
+
+    #[test]
+    fn test_from_params_all() {
+        let m = mk(&[("service", val("nginx")), ("state", val("restarted")), ("enabled", flag(true)), ("daemon_reload", flag(true))]);
+        assert_eq!(m.state, "restarted");
+        assert_eq!(m.enabled, Some(true));
+        assert!(m.daemon_reload);
+    }
+
+    fn mk_backend() -> Arc<dyn SystemBackend> { Arc::new(MockBackend::new()) }
+
+    #[tokio::test]
+    async fn test_check_active() {
+        let mock = MockBackend::new();
+        mock.expect_exec("systemctl", &["is-active", "nginx"], CommandOutput { stdout: "active\n".into(), stderr: String::new(), exit_code: 0 });
+        let backend: Arc<dyn SystemBackend> = Arc::new(mock);
+        let m = mk(&[("service", val("nginx"))]);
+        assert!(m.check_state(&*backend).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_check_inactive() {
+        let mock = MockBackend::new();
+        mock.expect_exec("systemctl", &["is-active", "nginx"], CommandOutput { stdout: "inactive\n".into(), stderr: String::new(), exit_code: 3 });
+        let backend: Arc<dyn SystemBackend> = Arc::new(mock);
+        let m = mk(&[("service", val("nginx"))]);
+        assert!(!m.check_state(&*backend).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_check_enabled() {
+        let mock = MockBackend::new();
+        mock.expect_exec("systemctl", &["is-active", "nginx"], CommandOutput { stdout: "active\n".into(), stderr: String::new(), exit_code: 0 });
+        mock.expect_exec("systemctl", &["is-enabled", "nginx"], CommandOutput { stdout: "enabled\n".into(), stderr: String::new(), exit_code: 0 });
+        let backend: Arc<dyn SystemBackend> = Arc::new(mock);
+        let m = mk(&[("service", val("nginx")), ("enabled", flag(true))]);
+        assert!(m.check_state(&*backend).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_check_not_enabled() {
+        let mock = MockBackend::new();
+        mock.expect_exec("systemctl", &["is-active", "nginx"], CommandOutput { stdout: "active\n".into(), stderr: String::new(), exit_code: 0 });
+        mock.expect_exec("systemctl", &["is-enabled", "nginx"], CommandOutput { stdout: "disabled\n".into(), stderr: String::new(), exit_code: 1 });
+        let backend: Arc<dyn SystemBackend> = Arc::new(mock);
+        let m = mk(&[("service", val("nginx")), ("enabled", flag(true))]);
+        assert!(!m.check_state(&*backend).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_apply_start() {
+        let mock = MockBackend::new();
+        mock.expect_exec("systemctl", &["start", "nginx"], CommandOutput { stdout: String::new(), stderr: String::new(), exit_code: 0 });
+        let backend: Arc<dyn SystemBackend> = Arc::new(mock);
+        let m = mk(&[("service", val("nginx")), ("state", val("started"))]);
+        let r = m.apply_changes(&*backend).await.unwrap();
+        assert!(r.changed);
+    }
+
+    #[tokio::test]
+    async fn test_apply_stop() {
+        let mock = MockBackend::new();
+        mock.expect_exec("systemctl", &["stop", "nginx"], CommandOutput { stdout: String::new(), stderr: String::new(), exit_code: 0 });
+        let backend: Arc<dyn SystemBackend> = Arc::new(mock);
+        let m = mk(&[("service", val("nginx")), ("state", val("stopped"))]);
+        let r = m.apply_changes(&*backend).await.unwrap();
+        assert!(r.changed);
+    }
+
+    #[tokio::test]
+    async fn test_apply_restart() {
+        let mock = MockBackend::new();
+        mock.expect_exec("systemctl", &["restart", "nginx"], CommandOutput { stdout: String::new(), stderr: String::new(), exit_code: 0 });
+        let backend: Arc<dyn SystemBackend> = Arc::new(mock);
+        let m = mk(&[("service", val("nginx")), ("state", val("restarted"))]);
+        let r = m.apply_changes(&*backend).await.unwrap();
+        assert!(r.changed);
+    }
+
+    #[tokio::test]
+    async fn test_apply_enable() {
+        let mock = MockBackend::new();
+        mock.expect_exec("systemctl", &["enable", "nginx"], CommandOutput { stdout: String::new(), stderr: String::new(), exit_code: 0 });
+        mock.expect_exec("systemctl", &["start", "nginx"], CommandOutput { stdout: String::new(), stderr: String::new(), exit_code: 0 });
+        let backend: Arc<dyn SystemBackend> = Arc::new(mock);
+        let m = mk(&[("service", val("nginx")), ("enabled", flag(true)), ("state", val("started"))]);
+        let r = m.apply_changes(&*backend).await.unwrap();
+        assert!(r.changed);
+    }
+
+    #[tokio::test]
+    async fn test_apply_daemon_reload() {
+        let mock = MockBackend::new();
+        mock.expect_exec("systemctl", &["daemon-reload"], CommandOutput { stdout: String::new(), stderr: String::new(), exit_code: 0 });
+        mock.expect_exec("systemctl", &["start", "nginx"], CommandOutput { stdout: String::new(), stderr: String::new(), exit_code: 0 });
+        let backend: Arc<dyn SystemBackend> = Arc::new(mock);
+        let m = mk(&[("service", val("nginx")), ("daemon_reload", flag(true))]);
+        let r = m.apply_changes(&*backend).await.unwrap();
+        assert!(r.changed);
+    }
+}
