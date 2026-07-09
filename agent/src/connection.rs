@@ -204,22 +204,8 @@ async fn handle_incoming(
                 info!("✓ pipeline signature verified");
             }
 
-            // Convert protocol steps -> pipeline steps (cheap clone of params).
-            let steps: Vec<crate::pipeline::StepSpec> = steps
-                .into_iter()
-                .map(|s| crate::pipeline::StepSpec { module: s.module, params: s.params })
-                .collect();
             info!(deployment_id = %deployment_id, n = steps.len(), "pipeline requested");
             deploy::run_pipeline(deployment_id, steps, cfg.clone(), ws).await;
-        }
-        WorkerToAgent::Shell {
-            task_id,
-            cmd,
-            cwd,
-            env,
-            timeout_s,
-        } => {
-            crate::handlers::handle_shell(task_id, cmd, cwd, env, timeout_s, ws).await;
         }
         WorkerToAgent::Shutdown {} => {
             info!("shutdown requested, exiting");

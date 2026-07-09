@@ -14,10 +14,6 @@
 
 use serde::{Deserialize, Serialize};
 
-fn default_shell_timeout_s() -> u64 {
-    60
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Metrics {
@@ -69,15 +65,6 @@ pub enum AgentOut {
     },
     #[serde(rename = "ready")]
     Ready { timestamp: u64 },
-    #[serde(rename = "shell_done")]
-    ShellDone {
-        task_id: String,
-        exit_code: i32,
-        stdout: String,
-        stderr: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,18 +81,29 @@ pub enum DeployStatus {
     Failed,
 }
 
-/// A single pipeline step as received over the wire.
+/// A single pipeline step: a shell command the agent executes.
 ///
-/// `module` selects which primitive to build (git_clone / build / run /
-/// compose / daemon / shell); `params` is an opaque JSON object the
-/// chosen module deserializes itself. Kept loose at the envelope level
-/// so adding a new module doesn't require a protocol change.
+/// The Worker (not the user) builds the full command — clone, build,
+/// run, tunnel — and sends it here. The agent is a thin executor: it
+/// runs each step in order, streams logs, and reports the final status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PipelineStep {
-    pub module: String,
+    /// Shell command to run (via `sh -c`).
+    pub cmd: String,
+    /// Working directory. Defaults to the deployment work dir.
     #[serde(default)]
-    pub params: serde_json::Value,
+    pub cwd: Option<String>,
+    /// Extra environment variables.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+    /// Timeout in seconds before the command is killed.
+    #[serde(default = "default_step_timeout_s")]
+    pub timeout_s: u64,
+}
+
+fn default_step_timeout_s() -> u64 {
+    300
 }
 
 /// Frames sent by the worker to the agent.
@@ -122,9 +120,9 @@ pub enum WorkerToAgent {
     Ping {},
     #[serde(rename = "shutdown")]
     Shutdown {},
-    /// Run an ordered list of composable module steps. Each step has a
-    /// `module` name (matching the agent's registry) and a `params` object
-    /// the module deserializes itself.
+    /// Run an ordered list of shell steps. The Worker builds each command
+    /// (clone / build / run / tunnel) and the agent executes them in order,
+    /// streaming logs, stopping at the first failure.
     #[serde(rename = "pipeline")]
     Pipeline {
         deployment_id: String,
@@ -135,20 +133,6 @@ pub enum WorkerToAgent {
         /// AGENT_SHARED_SECRET is set.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sig: Option<String>,
-    },
-    /// Run an arbitrary shell command. The Worker is responsible for
-    /// allowlisting/sandboxing this — never expose `shell` to a user
-    /// without an allowlist in front of it.
-    #[serde(rename = "shell")]
-    Shell {
-        task_id: String,
-        cmd: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<String>,
-        #[serde(default)]
-        env: std::collections::BTreeMap<String, String>,
-        #[serde(default = "default_shell_timeout_s")]
-        timeout_s: u64,
     },
     #[serde(rename = "error")]
     Error {
@@ -280,9 +264,9 @@ mod tests {
             "type":"pipeline",
             "deployment_id":"dep_1",
             "steps":[
-                {"module":"git_clone","params":{"repo_url":"https://github.com/owner/repo","ref":"main"}},
-                {"module":"build","params":{}},
-                {"module":"run","params":{"port":3000}}
+                {"cmd":"git clone https://github.com/owner/repo ."},
+                {"cmd":"docker run -d -p 3000:3000 myapp"},
+                {"cmd":"cloudflared tunnel run", "env":{"TUNNEL_TOKEN":"x"}}
             ],
             "sig":"v1.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         }"#;
@@ -291,7 +275,7 @@ mod tests {
             WorkerToAgent::Pipeline { deployment_id, steps, sig } => {
                 assert_eq!(deployment_id, "dep_1");
                 assert_eq!(steps.len(), 3);
-                assert_eq!(steps[0].module, "git_clone");
+                assert_eq!(steps[0].cmd, "git clone https://github.com/owner/repo .");
                 assert!(sig.is_some());
             }
             _ => panic!("expected Pipeline"),

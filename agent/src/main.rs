@@ -11,13 +11,9 @@ mod config;
 mod connection;
 mod crypto;
 mod deploy;
-mod detect;
-mod handlers;
 mod keys;
 mod log;
 mod logging;
-mod modules;
-mod pipeline;
 mod protocol;
 
 use anyhow::{Context, Result};

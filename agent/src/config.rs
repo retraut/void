@@ -20,11 +20,6 @@ pub struct Config {
     /// Path to persistent state (Ed25519 keypair). Defaults to /var/lib/void.
     pub state_dir: Option<String>,
 
-    /// Template for the public URL of a deployed app.
-    /// Use {port} as placeholder for the local port.
-    /// Example: "https://pr-{port}.void.example.com" or "https://{port}.loca.lt"
-    pub public_url_template: String,
-
     /// HMAC secret for verifying deploy frame signatures. If unset, signature
     /// verification is skipped (dev mode only — production must set this).
     pub agent_shared_secret: Option<String>,
@@ -49,8 +44,6 @@ impl Config {
             });
         let setup_token = std::env::var("VOID_SETUP_TOKEN")
             .unwrap_or_else(|_| "dev-setup-token".to_string());
-        let public_url_template = std::env::var("VOID_PUBLIC_URL_TEMPLATE")
-            .unwrap_or_else(|_| "https://pr-{port}.void.example.com".to_string());
         let agent_shared_secret = std::env::var("VOID_AGENT_SHARED_SECRET").ok();
 
         Ok(Config {
@@ -58,7 +51,6 @@ impl Config {
             server_id,
             setup_token,
             state_dir: None,
-            public_url_template,
             agent_shared_secret,
         })
     }
@@ -72,5 +64,10 @@ impl Config {
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
                     .join("void")
             })
+    }
+
+    /// Base directory for per-deployment work dirs (clones, builds).
+    pub fn work_dir(&self) -> std::path::PathBuf {
+        self.state_dir().join("work")
     }
 }

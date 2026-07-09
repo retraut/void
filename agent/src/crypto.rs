@@ -100,13 +100,13 @@ mod tests {
     #[test]
     fn test_pipeline_no_sig_canonical() {
         let steps = vec![
-            crate::protocol::PipelineStep { module: "git_clone".into(), params: serde_json::json!({}) },
-            crate::protocol::PipelineStep { module: "run".into(), params: serde_json::json!({}) },
+            crate::protocol::PipelineStep { cmd: "git clone https://github.com/owner/repo .".into(), cwd: None, env: Default::default(), timeout_s: 300 },
+            crate::protocol::PipelineStep { cmd: "docker run -d -p 3000:3000 myapp".into(), cwd: None, env: Default::default(), timeout_s: 300 },
         ];
         let ps = PipelineNoSig::from_frame("dep_1", &steps);
         let json = ps.canonical_json();
         assert!(json.contains("dep_1"));
         assert!(json.contains("pipeline"));
-        assert!(json.contains("git_clone"));
+        assert!(json.contains("git clone"));
     }
 }
