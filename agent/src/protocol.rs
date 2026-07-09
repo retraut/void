@@ -96,29 +96,11 @@ pub enum LogStream {
     Stderr,
 }
 
-impl LogStream {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LogStream::Stdout => "stdout",
-            LogStream::Stderr => "stderr",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DeployStatus {
     Success,
     Failed,
-}
-
-impl DeployStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DeployStatus::Success => "success",
-            DeployStatus::Failed => "failed",
-        }
-    }
 }
 
 /// Frames sent by the worker to the agent.
