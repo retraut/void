@@ -12,12 +12,13 @@ mod connection;
 mod crypto;
 mod deploy;
 mod detect;
+mod handlers;
 mod keys;
 mod log;
 mod logging;
+mod modules;
+mod pipeline;
 mod protocol;
-mod shell;
-mod tunnel;
 
 use anyhow::{Context, Result};
 use std::sync::Arc;

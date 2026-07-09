@@ -78,15 +78,6 @@ pub enum AgentOut {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    #[serde(rename = "compose_up_done")]
-    ComposeUpDone {
-        task_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        container_id: Option<String>,
-        exit_code: i32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,6 +94,20 @@ pub enum DeployStatus {
     Failed,
 }
 
+/// A single pipeline step as received over the wire.
+///
+/// `module` selects which primitive to build (git_clone / build / run /
+/// compose / daemon / shell); `params` is an opaque JSON object the
+/// chosen module deserializes itself. Kept loose at the envelope level
+/// so adding a new module doesn't require a protocol change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineStep {
+    pub module: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
 /// Frames sent by the worker to the agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -115,33 +120,22 @@ pub enum WorkerToAgent {
     },
     #[serde(rename = "ping")]
     Ping {},
-    #[serde(rename = "deploy")]
-    Deploy {
+    #[serde(rename = "shutdown")]
+    Shutdown {},
+    /// Run an ordered list of composable module steps. Each step has a
+    /// `module` name (matching the agent's registry) and a `params` object
+    /// the module deserializes itself.
+    #[serde(rename = "pipeline")]
+    Pipeline {
         deployment_id: String,
-        repo_url: String,
-        #[serde(rename = "ref")]
-        ref_: String,
         #[serde(default)]
-        env: std::collections::BTreeMap<String, String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        build_command: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        serve_command: Option<String>,
-        port: u16,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        hostname: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        public_url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tunnel_token: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tunnel_id: Option<String>,
-        /// HMAC-SHA256 signature: "v1.<64-hex>"
+        steps: Vec<PipelineStep>,
+        /// HMAC-SHA256 signature: "v1.<64-hex>". Covers the canonical JSON of
+        /// the deployment (deployment_id + steps). Verified by the agent when
+        /// AGENT_SHARED_SECRET is set.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sig: Option<String>,
     },
-    #[serde(rename = "shutdown")]
-    Shutdown {},
     /// Run an arbitrary shell command. The Worker is responsible for
     /// allowlisting/sandboxing this — never expose `shell` to a user
     /// without an allowlist in front of it.
@@ -155,15 +149,6 @@ pub enum WorkerToAgent {
         env: std::collections::BTreeMap<String, String>,
         #[serde(default = "default_shell_timeout_s")]
         timeout_s: u64,
-    },
-    /// Run `docker compose up -d` with the given compose YAML.
-    #[serde(rename = "compose_up")]
-    ComposeUp {
-        task_id: String,
-        project_name: String,
-        yaml: String,
-        #[serde(default)]
-        env: std::collections::BTreeMap<String, String>,
     },
     #[serde(rename = "error")]
     Error {
@@ -283,39 +268,34 @@ mod tests {
     }
 
     #[test]
-    fn worker_to_agent_deploy_with_sig() {
-        let raw = r#"{
-            "type":"deploy",
-            "deployment_id":"dep_1",
-            "repo_url":"https://github.com/owner/repo",
-            "ref":"main",
-            "env":{"NODE_ENV":"production"},
-            "port":3000,
-            "sig":"v1.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        }"#;
-        let f: WorkerToAgent = serde_json::from_str(raw).expect("parse");
-        match f {
-            WorkerToAgent::Deploy {
-                ref_,
-                port,
-                sig,
-                env,
-                ..
-            } => {
-                assert_eq!(ref_, "main");
-                assert_eq!(port, 3000);
-                assert!(sig.is_some());
-                assert_eq!(env.get("NODE_ENV").map(String::as_str), Some("production"));
-            }
-            _ => panic!("expected Deploy"),
-        }
-    }
-
-    #[test]
     fn worker_to_agent_ping() {
         let raw = r#"{"type":"ping"}"#;
         let f: WorkerToAgent = serde_json::from_str(raw).expect("parse");
         matches!(f, WorkerToAgent::Ping {});
+    }
+
+    #[test]
+    fn worker_to_agent_pipeline_with_sig() {
+        let raw = r#"{
+            "type":"pipeline",
+            "deployment_id":"dep_1",
+            "steps":[
+                {"module":"git_clone","params":{"repo_url":"https://github.com/owner/repo","ref":"main"}},
+                {"module":"build","params":{}},
+                {"module":"run","params":{"port":3000}}
+            ],
+            "sig":"v1.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }"#;
+        let f: WorkerToAgent = serde_json::from_str(raw).expect("parse");
+        match f {
+            WorkerToAgent::Pipeline { deployment_id, steps, sig } => {
+                assert_eq!(deployment_id, "dep_1");
+                assert_eq!(steps.len(), 3);
+                assert_eq!(steps[0].module, "git_clone");
+                assert!(sig.is_some());
+            }
+            _ => panic!("expected Pipeline"),
+        }
     }
 
     #[test]

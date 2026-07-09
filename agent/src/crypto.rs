@@ -1,66 +1,28 @@
-//! Cryptographic utilities for deploy frame verification.
+//! Cryptographic utilities for pipeline frame verification.
 //! HMAC-SHA256 signature verification for frames signed by the Worker.
 
 use serde::Serialize;
-use std::collections::BTreeMap;
 
-/// Canonical payload used for HMAC signing.
+use crate::protocol::PipelineStep;
+
+/// Canonical payload used for HMAC signing of a `pipeline` frame.
 /// Must match the Worker's signing structure field-for-field.
-/// Defined here (not in protocol.rs) because protocol types include
-/// the `sig` field, and we need a struct WITHOUT it for signing.
+/// Omits `sig` (which is on the frame) and serializes the deployment
+/// id + ordered steps into a stable canonical JSON.
 #[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub struct DeployNoSig<'a> {
+pub struct PipelineNoSig<'a> {
     #[serde(rename = "type")]
     pub ty: &'a str,
     pub deployment_id: &'a str,
-    pub repo_url: &'a str,
-    #[serde(rename = "ref")]
-    pub ref_: &'a str,
-    pub env: &'a BTreeMap<String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_command: &'a Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub serve_command: &'a Option<String>,
-    pub port: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hostname: &'a Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_url: &'a Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tunnel_token: &'a Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tunnel_id: &'a Option<String>,
+    pub steps: &'a [PipelineStep],
 }
 
-impl<'a> DeployNoSig<'a> {
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_frame(
-        deployment_id: &'a str,
-        repo_url: &'a str,
-        ref_: &'a str,
-        env: &'a BTreeMap<String, String>,
-        build_command: &'a Option<String>,
-        serve_command: &'a Option<String>,
-        port: u16,
-        hostname: &'a Option<String>,
-        public_url: &'a Option<String>,
-        tunnel_token: &'a Option<String>,
-        tunnel_id: &'a Option<String>,
-    ) -> Self {
+impl<'a> PipelineNoSig<'a> {
+    pub fn from_frame(deployment_id: &'a str, steps: &'a [PipelineStep]) -> Self {
         Self {
-            ty: "deploy",
+            ty: "pipeline",
             deployment_id,
-            repo_url,
-            ref_,
-            env,
-            build_command,
-            serve_command,
-            port,
-            hostname,
-            public_url,
-            tunnel_token,
-            tunnel_id,
+            steps,
         }
     }
 
@@ -136,11 +98,15 @@ mod tests {
     }
 
     #[test]
-    fn test_deploy_no_sig_canonical() {
-        let env = BTreeMap::new();
-        let ds = DeployNoSig::from_frame("dep_1", "https://repo.git", "main", &env, &None, &None, 8080, &None, &None, &None, &None);
-        let json = ds.canonical_json();
+    fn test_pipeline_no_sig_canonical() {
+        let steps = vec![
+            crate::protocol::PipelineStep { module: "git_clone".into(), params: serde_json::json!({}) },
+            crate::protocol::PipelineStep { module: "run".into(), params: serde_json::json!({}) },
+        ];
+        let ps = PipelineNoSig::from_frame("dep_1", &steps);
+        let json = ps.canonical_json();
         assert!(json.contains("dep_1"));
-        assert!(json.contains("deploy"));
+        assert!(json.contains("pipeline"));
+        assert!(json.contains("git_clone"));
     }
 }

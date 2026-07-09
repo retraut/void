@@ -173,24 +173,15 @@ async fn handle_incoming(
             let ready = AgentOut::Ready { timestamp: crypto::now_ts() };
             ws.send(Message::text(serde_json::to_string(&ready)?)).await.ok();
         }
-        WorkerToAgent::Deploy {
+        WorkerToAgent::Pipeline {
             deployment_id,
-            repo_url,
-            ref_,
-            env: _env,
-            build_command,
-            serve_command,
-            port,
-            hostname,
-            public_url,
-            tunnel_token,
-            tunnel_id,
+            steps,
             sig,
         } => {
             // CRITICAL: Verify HMAC signature if AGENT_SHARED_SECRET is set
             if let Some(secret) = &cfg.agent_shared_secret {
                 let Some(sig_str) = &sig else {
-                    warn!("deploy message has no signature but AGENT_SHARED_SECRET is set — rejecting");
+                    warn!("pipeline message has no signature but AGENT_SHARED_SECRET is set — rejecting");
                     let _ = ws
                         .send(Message::text(
                             r#"{"type":"error","code":"missing_signature"}"#.to_string(),
@@ -198,15 +189,11 @@ async fn handle_incoming(
                         .await;
                     return Ok(false);
                 };
-                let payload = crypto::DeployNoSig::from_frame(
-                    &deployment_id, &repo_url, &ref_, &_env,
-                    &build_command, &serve_command, port,
-                    &hostname, &public_url, &tunnel_token, &tunnel_id,
-                );
+                let payload = crypto::PipelineNoSig::from_frame(&deployment_id, &steps);
                 let payload_str = payload.canonical_json();
                 let valid = crypto::verify_hmac_sha256(secret, &payload_str, sig_str);
                 if !valid {
-                    warn!("HMAC signature verification FAILED for deploy — rejecting");
+                    warn!("HMAC signature verification FAILED for pipeline — rejecting");
                     let _ = ws
                         .send(Message::text(
                             r#"{"type":"error","code":"invalid_signature"}"#.to_string(),
@@ -214,25 +201,16 @@ async fn handle_incoming(
                         .await;
                     return Ok(false);
                 }
-                info!("✓ deploy signature verified");
+                info!("✓ pipeline signature verified");
             }
 
-            info!(deployment_id = %deployment_id, repo = %repo_url, ref_ = %ref_, "deploy requested");
-            deploy::run_deploy(
-                deployment_id,
-                repo_url,
-                ref_,
-                build_command,
-                serve_command,
-                Some(port),
-                hostname,
-                public_url,
-                tunnel_token,
-                tunnel_id,
-                cfg.clone(),
-                ws,
-            )
-            .await;
+            // Convert protocol steps -> pipeline steps (cheap clone of params).
+            let steps: Vec<crate::pipeline::StepSpec> = steps
+                .into_iter()
+                .map(|s| crate::pipeline::StepSpec { module: s.module, params: s.params })
+                .collect();
+            info!(deployment_id = %deployment_id, n = steps.len(), "pipeline requested");
+            deploy::run_pipeline(deployment_id, steps, cfg.clone(), ws).await;
         }
         WorkerToAgent::Shell {
             task_id,
@@ -241,15 +219,7 @@ async fn handle_incoming(
             env,
             timeout_s,
         } => {
-            crate::shell::handle_shell(task_id, cmd, cwd, env, timeout_s, ws).await;
-        }
-        WorkerToAgent::ComposeUp {
-            task_id,
-            project_name,
-            yaml,
-            env,
-        } => {
-            crate::shell::handle_compose_up(task_id, project_name, yaml, env, ws).await;
+            crate::handlers::handle_shell(task_id, cmd, cwd, env, timeout_s, ws).await;
         }
         WorkerToAgent::Shutdown {} => {
             info!("shutdown requested, exiting");
