@@ -120,7 +120,7 @@ Closest neighbor: [Devpush](https://github.com/hunvreus/devpush) (4.7k stars) â€
 4. Worker generates unique hostname prefix: pr-42-myapp (or myapp for prod)
 5. Worker looks up which server (void-cell DO) hosts this project
 6. Worker writes deployment record to D1 (status: queued)
-7. Worker sends WS message to void-cell DO: { type: "deploy", ... }
+7. Worker sends WS message to void-cell DO: { type: "pipeline", steps: [...] }
 8. DO forwards to connected void-agent via WS
 9. Agent:
    a. git clone using GitHub App installation token passed in deploy message:

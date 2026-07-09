@@ -13,10 +13,7 @@
 //! receiving side to reject the frame — this is the point.
 
 use serde::{Deserialize, Serialize};
-
-fn default_shell_timeout_s() -> u64 {
-    60
-}
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,24 +66,6 @@ pub enum AgentOut {
     },
     #[serde(rename = "ready")]
     Ready { timestamp: u64 },
-    #[serde(rename = "shell_done")]
-    ShellDone {
-        task_id: String,
-        exit_code: i32,
-        stdout: String,
-        stderr: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-    },
-    #[serde(rename = "compose_up_done")]
-    ComposeUpDone {
-        task_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        container_id: Option<String>,
-        exit_code: i32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -96,15 +75,6 @@ pub enum LogStream {
     Stderr,
 }
 
-impl LogStream {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LogStream::Stdout => "stdout",
-            LogStream::Stderr => "stderr",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DeployStatus {
@@ -112,13 +82,29 @@ pub enum DeployStatus {
     Failed,
 }
 
-impl DeployStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DeployStatus::Success => "success",
-            DeployStatus::Failed => "failed",
-        }
-    }
+/// A single pipeline step: a shell command the agent executes.
+///
+/// The Worker (not the user) builds the full command — clone, build,
+/// run, tunnel — and sends it here. The agent is a thin executor: it
+/// runs each step in order, streams logs, and reports the final status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineStep {
+    /// Shell command to run (via `sh -c`).
+    pub cmd: String,
+    /// Working directory. Defaults to the deployment work dir.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Extra environment variables.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
+    /// Timeout in seconds before the command is killed.
+    #[serde(default = "default_step_timeout_s")]
+    pub timeout_s: u64,
+}
+
+fn default_step_timeout_s() -> u64 {
+    300
 }
 
 /// Frames sent by the worker to the agent.
@@ -133,55 +119,21 @@ pub enum WorkerToAgent {
     },
     #[serde(rename = "ping")]
     Ping {},
-    #[serde(rename = "deploy")]
-    Deploy {
-        deployment_id: String,
-        repo_url: String,
-        #[serde(rename = "ref")]
-        ref_: String,
-        #[serde(default)]
-        env: std::collections::BTreeMap<String, String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        build_command: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        serve_command: Option<String>,
-        port: u16,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        hostname: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        public_url: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tunnel_token: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tunnel_id: Option<String>,
-        /// HMAC-SHA256 signature: "v1.<64-hex>"
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        sig: Option<String>,
-    },
     #[serde(rename = "shutdown")]
     Shutdown {},
-    /// Run an arbitrary shell command. The Worker is responsible for
-    /// allowlisting/sandboxing this — never expose `shell` to a user
-    /// without an allowlist in front of it.
-    #[serde(rename = "shell")]
-    Shell {
-        task_id: String,
-        cmd: String,
+    /// Run an ordered list of shell steps. The Worker builds each command
+    /// (clone / build / run / tunnel) and the agent executes them in order,
+    /// streaming logs, stopping at the first failure.
+    #[serde(rename = "pipeline")]
+    Pipeline {
+        deployment_id: String,
+        #[serde(default)]
+        steps: Vec<PipelineStep>,
+        /// HMAC-SHA256 signature: "v1.<64-hex>". Covers the canonical JSON of
+        /// the deployment (deployment_id + steps). Verified by the agent when
+        /// AGENT_SHARED_SECRET is set.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<String>,
-        #[serde(default)]
-        env: std::collections::BTreeMap<String, String>,
-        #[serde(default = "default_shell_timeout_s")]
-        timeout_s: u64,
-    },
-    /// Run `docker compose up -d` with the given compose YAML.
-    #[serde(rename = "compose_up")]
-    ComposeUp {
-        task_id: String,
-        project_name: String,
-        yaml: String,
-        #[serde(default)]
-        env: std::collections::BTreeMap<String, String>,
+        sig: Option<String>,
     },
     #[serde(rename = "error")]
     Error {
@@ -301,39 +253,34 @@ mod tests {
     }
 
     #[test]
-    fn worker_to_agent_deploy_with_sig() {
-        let raw = r#"{
-            "type":"deploy",
-            "deployment_id":"dep_1",
-            "repo_url":"https://github.com/owner/repo",
-            "ref":"main",
-            "env":{"NODE_ENV":"production"},
-            "port":3000,
-            "sig":"v1.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        }"#;
-        let f: WorkerToAgent = serde_json::from_str(raw).expect("parse");
-        match f {
-            WorkerToAgent::Deploy {
-                ref_,
-                port,
-                sig,
-                env,
-                ..
-            } => {
-                assert_eq!(ref_, "main");
-                assert_eq!(port, 3000);
-                assert!(sig.is_some());
-                assert_eq!(env.get("NODE_ENV").map(String::as_str), Some("production"));
-            }
-            _ => panic!("expected Deploy"),
-        }
-    }
-
-    #[test]
     fn worker_to_agent_ping() {
         let raw = r#"{"type":"ping"}"#;
         let f: WorkerToAgent = serde_json::from_str(raw).expect("parse");
         matches!(f, WorkerToAgent::Ping {});
+    }
+
+    #[test]
+    fn worker_to_agent_pipeline_with_sig() {
+        let raw = r#"{
+            "type":"pipeline",
+            "deployment_id":"dep_1",
+            "steps":[
+                {"cmd":"git clone https://github.com/owner/repo ."},
+                {"cmd":"docker run -d -p 3000:3000 myapp"},
+                {"cmd":"cloudflared tunnel run", "env":{"TUNNEL_TOKEN":"x"}}
+            ],
+            "sig":"v1.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }"#;
+        let f: WorkerToAgent = serde_json::from_str(raw).expect("parse");
+        match f {
+            WorkerToAgent::Pipeline { deployment_id, steps, sig } => {
+                assert_eq!(deployment_id, "dep_1");
+                assert_eq!(steps.len(), 3);
+                assert_eq!(steps[0].cmd, "git clone https://github.com/owner/repo .");
+                assert!(sig.is_some());
+            }
+            _ => panic!("expected Pipeline"),
+        }
     }
 
     #[test]

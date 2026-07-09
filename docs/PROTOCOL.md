@@ -109,27 +109,29 @@ Reply to Worker `ping`.
 
 Agent must reply with `ready { timestamp }`.
 
-### deploy
+### pipeline
 
 ```json
 {
-  "type": "deploy",
+  "type": "pipeline",
   "deployment_id": "dep_a1b2c3d4e5f6",
-  "repo_url": "https://github.com/owner/repo",
-  "ref": "main",
-  "env": { "NODE_ENV": "production" },
-  "build_command": "npm ci && npm run build",
-  "serve_command": "node dist/server.js",
-  "port": 3000,
-  "hostname": "my-app",
-  "public_url": "https://my-app.void.example.com",
-  "tunnel_token": "base64-tunnel-credential",
-  "tunnel_id": "uuid-tunnel",
+  "steps": [
+    { "cmd": "git clone --depth 1 --branch main https://github.com/owner/repo .", "timeout_s": 300 },
+    { "cmd": "npm ci && npm run build", "timeout_s": 600 },
+    { "cmd": "node dist/server.js", "timeout_s": 300 },
+    { "cmd": "cloudflared tunnel --no-autoupdate run", "env": { "TUNNEL_TOKEN": "base64-tunnel-credential" }, "timeout_s": 300 }
+  ],
   "sig": "v1.abc123deadbeef..."
 }
 ```
 
-Agent executes: `git clone --depth 1 --branch {ref} {repo_url}` → `sh -c {build_command}` (optional) → `sh -c {serve_command}` (optional) → health check → deploy_done.
+The agent is a **thin shell executor**: it runs each `cmd` via `sh -c` (in the deployment work dir), streams stdout/stderr back as `log` frames, stops at the first non-zero exit, and reports `deploy_done`. The Worker owns all deploy logic — it builds each `cmd` (clone / build / serve / tunnel). Steps run sequentially; order matters.
+
+Each step:
+- `cmd` (required): the shell command.
+- `cwd` (optional): working directory; defaults to the deployment work dir.
+- `env` (optional): extra environment variables (e.g. `TUNNEL_TOKEN`).
+- `timeout_s` (optional, default 300): kill the command (and report failure) after this many seconds.
 
 `sig` is HMAC-SHA256 of the canonical JSON (all fields except `sig` itself) signed with `AGENT_SHARED_SECRET`. Format: `"v1.<hex>"`. If `AGENT_SHARED_SECRET` is configured on the agent side and `sig` is missing or invalid, agent rejects with `{"type":"error","code":"invalid_signature"}` or `"missing_signature"`.
 
@@ -215,14 +217,15 @@ Agent                     Worker (VoidCell)           D1
 MCP/REST ── POST /cell/{id}/send-deploy ──> VoidCell
                                                │
                           (validate ref/repo_url/command)
-                          (HMAC-sign deploy msg)
+                          (build ordered shell steps)
+                          (HMAC-sign pipeline msg)
                           │
-                          ├── WS deploy ──────────────> Agent
+                          ├── WS pipeline ─────────────> Agent
                           │                              │
-                          │                    git clone │
-                          │                    build     │
-                          │                    serve     │
-                          │                    health    │
+                          │                    step 0: git clone
+                          │                    step 1: build
+                          │                    step 2: serve
+                          │                    step 3: tunnel
                           │                              │
                           │<── log, log, log ────────── WS
                           │     (streamed live)          │
@@ -240,11 +243,11 @@ MCP/REST ── POST /cell/{id}/send-deploy ──> VoidCell
 
 Messages sent from Worker to Agent over WS include an HMAC-SHA256 signature.
 
-**Fields included in signature:** All fields of the `deploy` frame **except** `sig` itself.  
-**Signed content:** `JSON.stringify(deployMsgWithoutSig)` — canonical JSON (key order as produced by `JSON.stringify`).  
+**Fields included in signature:** All fields of the `pipeline` frame **except** `sig` itself — i.e. `type`, `deployment_id`, and `steps`.  
+**Signed content:** `JSON.stringify({ type: "pipeline", deployment_id, steps })` where each step is `{ cmd, env?, timeout_s }` (absent `cwd`/`env` are omitted, and `timeout_s` is always present), with `steps` serialized in order. This MUST byte-for-byte match the agent's `PipelineNoSig` canonical JSON (`serde_json::to_string` of `{ type, deployment_id, steps }` with `cwd`/`env` skipped when empty).  
 **Signature format:** `v1.<64-hex-chars>`  
 **Key:** `AGENT_SHARED_SECRET` (must match on both sides)  
-**Verification:** Agent strips `sig`, stringifies remaining fields, recomputes HMAC, compares with constant-time.
+**Verification:** Agent strips `sig`, serializes the remaining fields via `PipelineNoSig::canonical_json()`, recomputes HMAC, compares with constant-time.
 
 If `agent_shared_secret` is not set in agent config, signature verification is **skipped** (dev mode only).
 

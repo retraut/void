@@ -9,7 +9,6 @@
   },
   "scripts": {
     "dev:worker": "pnpm --filter @void/worker dev",
-    "dev:ui": "pnpm --filter @void/ui dev",
     "build:worker": "pnpm --filter @void/worker build",
     "build:agent": "pnpm --filter @void/agent build",
     "deploy:worker": "pnpm --filter @void/worker deploy",

@@ -1,66 +1,28 @@
-//! Cryptographic utilities for deploy frame verification.
+//! Cryptographic utilities for pipeline frame verification.
 //! HMAC-SHA256 signature verification for frames signed by the Worker.
 
 use serde::Serialize;
-use std::collections::BTreeMap;
 
-/// Canonical payload used for HMAC signing.
+use crate::protocol::PipelineStep;
+
+/// Canonical payload used for HMAC signing of a `pipeline` frame.
 /// Must match the Worker's signing structure field-for-field.
-/// Defined here (not in protocol.rs) because protocol types include
-/// the `sig` field, and we need a struct WITHOUT it for signing.
+/// Omits `sig` (which is on the frame) and serializes the deployment
+/// id + ordered steps into a stable canonical JSON.
 #[derive(Serialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub struct DeployNoSig<'a> {
+pub struct PipelineNoSig<'a> {
     #[serde(rename = "type")]
     pub ty: &'a str,
     pub deployment_id: &'a str,
-    pub repo_url: &'a str,
-    #[serde(rename = "ref")]
-    pub ref_: &'a str,
-    pub env: &'a BTreeMap<String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_command: &'a Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub serve_command: &'a Option<String>,
-    pub port: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hostname: &'a Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_url: &'a Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tunnel_token: &'a Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tunnel_id: &'a Option<String>,
+    pub steps: &'a [PipelineStep],
 }
 
-impl<'a> DeployNoSig<'a> {
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_frame(
-        deployment_id: &'a str,
-        repo_url: &'a str,
-        ref_: &'a str,
-        env: &'a BTreeMap<String, String>,
-        build_command: &'a Option<String>,
-        serve_command: &'a Option<String>,
-        port: u16,
-        hostname: &'a Option<String>,
-        public_url: &'a Option<String>,
-        tunnel_token: &'a Option<String>,
-        tunnel_id: &'a Option<String>,
-    ) -> Self {
+impl<'a> PipelineNoSig<'a> {
+    pub fn from_frame(deployment_id: &'a str, steps: &'a [PipelineStep]) -> Self {
         Self {
-            ty: "deploy",
+            ty: "pipeline",
             deployment_id,
-            repo_url,
-            ref_,
-            env,
-            build_command,
-            serve_command,
-            port,
-            hostname,
-            public_url,
-            tunnel_token,
-            tunnel_id,
+            steps,
         }
     }
 
@@ -136,11 +98,35 @@ mod tests {
     }
 
     #[test]
-    fn test_deploy_no_sig_canonical() {
-        let env = BTreeMap::new();
-        let ds = DeployNoSig::from_frame("dep_1", "https://repo.git", "main", &env, &None, &None, 8080, &None, &None, &None, &None);
-        let json = ds.canonical_json();
-        assert!(json.contains("dep_1"));
-        assert!(json.contains("deploy"));
+    fn test_pipeline_no_sig_canonical() {
+        // Steps with no cwd/env must serialize WITHOUT those fields, and
+        // in cmd → (env) → timeout_s order — this MUST match the Worker's
+        // `JSON.stringify({type,deployment_id,steps})` canonical used for
+        // HMAC signing. The Worker builds env only when present.
+        let steps = vec![
+            crate::protocol::PipelineStep { cmd: "git clone https://github.com/owner/repo .".into(), cwd: None, env: Default::default(), timeout_s: 300 },
+            crate::protocol::PipelineStep { cmd: "docker run -d -p 3000:3000 myapp".into(), cwd: None, env: Default::default(), timeout_s: 300 },
+        ];
+        let ps = PipelineNoSig::from_frame("dep_1", &steps);
+        let json = ps.canonical_json();
+        assert_eq!(
+            json,
+            r#"{"type":"pipeline","deployment_id":"dep_1","steps":[{"cmd":"git clone https://github.com/owner/repo .","timeout_s":300},{"cmd":"docker run -d -p 3000:3000 myapp","timeout_s":300}]}"#
+        );
+    }
+
+    #[test]
+    fn test_pipeline_no_sig_canonical_with_env() {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("TUNNEL_TOKEN".to_string(), "secret".to_string());
+        let steps = vec![
+            crate::protocol::PipelineStep { cmd: "cloudflared tunnel run".into(), cwd: None, env, timeout_s: 300 },
+        ];
+        let ps = PipelineNoSig::from_frame("dep_1", &steps);
+        let json = ps.canonical_json();
+        assert_eq!(
+            json,
+            r#"{"type":"pipeline","deployment_id":"dep_1","steps":[{"cmd":"cloudflared tunnel run","env":{"TUNNEL_TOKEN":"secret"},"timeout_s":300}]}"#
+        );
     }
 }

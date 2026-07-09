@@ -85,30 +85,66 @@ export class VoidCell {
 				if (!c.ok) return Response.json({ error: c.reason }, { status: 400 });
 			}
 
-			// Build the deploy message and HMAC-sign it
-			const deployMsg: WorkerToAgentFrame = {
-				type: "deploy",
+			// Build the ordered list of shell steps. The agent is a thin
+			// executor: clone → build → serve → tunnel. The Worker owns
+			// all the logic (it knows the framework, the port, the tunnel
+			// token). Steps run sequentially; the agent stops at the first
+			// non-zero exit and reports DeployDone.
+			const steps: Array<{
+				cmd: string;
+				env?: Record<string, string>;
+				timeout_s?: number;
+			}> = [];
+			steps.push({
+				cmd: `git clone --depth 1 --branch ${body.ref} ${urlCheck.normalized} .`,
+				timeout_s: 300,
+			});
+			if (body.build_command) {
+				steps.push({ cmd: body.build_command, timeout_s: 600 });
+			}
+			if (body.serve_command) {
+				steps.push({ cmd: body.serve_command, timeout_s: 300 });
+			}
+			if (body.tunnel_token) {
+				steps.push({
+					cmd: "cloudflared tunnel --no-autoupdate run",
+					env: { TUNNEL_TOKEN: body.tunnel_token },
+					timeout_s: 300,
+				});
+			}
+
+			// Build the pipeline frame and HMAC-sign its canonical JSON.
+			// Canonical form MUST match `PipelineNoSig` in agent/src/crypto.rs:
+			//   { "type": "pipeline", "deployment_id": <id>, "steps": [ ... ] }
+			// (sig is excluded; steps are serialized exactly as below).
+			const pipelineMsg: WorkerToAgentFrame = {
+				type: "pipeline",
 				deployment_id: body.deployment_id,
-				repo_url: urlCheck.normalized,
-				ref: body.ref,
-				env: body.env || {},
-				build_command: body.build_command,
-				serve_command: body.serve_command,
-				port: body.port,
-				hostname: body.hostname,
-				public_url: body.public_url,
-				tunnel_token: body.tunnel_token,
-				tunnel_id: body.tunnel_id,
+				steps,
 			};
 			if (this.env.AGENT_SHARED_SECRET) {
 				const { signWithAgentSecret } = await import("./security");
-				// Sign the canonical JSON without the `sig` field itself
-				const { sig: _ignored, ...payload } = deployMsg;
-				const payloadStr = JSON.stringify(payload);
-				(deployMsg as { sig?: string }).sig = await signWithAgentSecret(this.env.AGENT_SHARED_SECRET, payloadStr);
+				// Canonical form MUST match `PipelineNoSig` in agent/src/crypto.rs.
+				// The agent serializes each step with serde, omitting absent
+				// `cwd`/`env` and always including `timeout_s`, in field order
+				// cmd → env → timeout_s. We replicate that exactly.
+				const canonicalSteps = steps.map((s) => {
+					const step: Record<string, unknown> = { cmd: s.cmd, timeout_s: s.timeout_s };
+					if (s.env && Object.keys(s.env).length > 0) step.env = s.env;
+					return step;
+				});
+				const canonical = JSON.stringify({
+					type: "pipeline",
+					deployment_id: body.deployment_id,
+					steps: canonicalSteps,
+				});
+				(pipelineMsg as { sig?: string }).sig = await signWithAgentSecret(
+					this.env.AGENT_SHARED_SECRET,
+					canonical,
+				);
 			}
-			this.ws.send(JSON.stringify(deployMsg));
-			return Response.json({ ok: true, sent: deployMsg, signed: !!(deployMsg as { sig?: string }).sig });
+			this.ws.send(JSON.stringify(pipelineMsg));
+			return Response.json({ ok: true, sent: pipelineMsg, signed: !!(pipelineMsg as { sig?: string }).sig });
 		}
 
 		// Internal: subscribe to log stream (SSE)
