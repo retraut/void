@@ -13,6 +13,7 @@
 //! receiving side to reject the frame — this is the point.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -92,10 +93,10 @@ pub struct PipelineStep {
     /// Shell command to run (via `sh -c`).
     pub cmd: String,
     /// Working directory. Defaults to the deployment work dir.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     /// Extra environment variables.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: std::collections::BTreeMap<String, String>,
     /// Timeout in seconds before the command is killed.
     #[serde(default = "default_step_timeout_s")]

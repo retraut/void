@@ -99,14 +99,34 @@ mod tests {
 
     #[test]
     fn test_pipeline_no_sig_canonical() {
+        // Steps with no cwd/env must serialize WITHOUT those fields, and
+        // in cmd → (env) → timeout_s order — this MUST match the Worker's
+        // `JSON.stringify({type,deployment_id,steps})` canonical used for
+        // HMAC signing. The Worker builds env only when present.
         let steps = vec![
             crate::protocol::PipelineStep { cmd: "git clone https://github.com/owner/repo .".into(), cwd: None, env: Default::default(), timeout_s: 300 },
             crate::protocol::PipelineStep { cmd: "docker run -d -p 3000:3000 myapp".into(), cwd: None, env: Default::default(), timeout_s: 300 },
         ];
         let ps = PipelineNoSig::from_frame("dep_1", &steps);
         let json = ps.canonical_json();
-        assert!(json.contains("dep_1"));
-        assert!(json.contains("pipeline"));
-        assert!(json.contains("git clone"));
+        assert_eq!(
+            json,
+            r#"{"type":"pipeline","deployment_id":"dep_1","steps":[{"cmd":"git clone https://github.com/owner/repo .","timeout_s":300},{"cmd":"docker run -d -p 3000:3000 myapp","timeout_s":300}]}"#
+        );
+    }
+
+    #[test]
+    fn test_pipeline_no_sig_canonical_with_env() {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("TUNNEL_TOKEN".to_string(), "secret".to_string());
+        let steps = vec![
+            crate::protocol::PipelineStep { cmd: "cloudflared tunnel run".into(), cwd: None, env, timeout_s: 300 },
+        ];
+        let ps = PipelineNoSig::from_frame("dep_1", &steps);
+        let json = ps.canonical_json();
+        assert_eq!(
+            json,
+            r#"{"type":"pipeline","deployment_id":"dep_1","steps":[{"cmd":"cloudflared tunnel run","env":{"TUNNEL_TOKEN":"secret"},"timeout_s":300}]}"#
+        );
     }
 }

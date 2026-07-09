@@ -156,23 +156,31 @@ export const PingFrameSchema = z
 	.strict();
 
 /**
- * Deploy command. All fields except sig are part of the HMAC payload.
- * sig is set by Worker when AGENT_SHARED_SECRET is configured.
+ * A single pipeline step — a shell command the agent runs via `sh -c`.
+ * Mirrors `PipelineStep` in `agent/src/protocol.rs` field-for-field.
  */
-export const DeployFrameSchema = z
+export const PipelineStepSchema = z
 	.object({
-		type: z.literal("deploy"),
+		cmd: z.string().min(1).max(8000),
+		cwd: z.string().min(1).max(4096).optional(),
+		env: EnvSchema.optional(),
+		timeout_s: z.number().int().positive().max(86400).optional(),
+	})
+	.strict();
+
+/**
+ * Pipeline command — an ordered list of shell steps. The Worker builds
+ * each step's `cmd` (clone / build / run / tunnel); the agent is a thin
+ * executor. All fields except sig are part of the HMAC payload. sig is
+ * set by the Worker when AGENT_SHARED_SECRET is configured.
+ *
+ * Mirrors `WorkerToAgent::Pipeline` in `agent/src/protocol.rs`.
+ */
+export const PipelineFrameSchema = z
+	.object({
+		type: z.literal("pipeline"),
 		deployment_id: IdSchema,
-		repo_url: RepoUrlSchema,
-		ref: GitRefSchema,
-		env: EnvSchema,
-		build_command: ShellCommandSchema.optional(),
-		serve_command: ShellCommandSchema.optional(),
-		port: PortSchema,
-		hostname: z.string().min(1).max(253).optional(),
-		public_url: z.string().url().optional(),
-		tunnel_token: z.string().min(1).max(4096).optional(),
-		tunnel_id: z.string().min(1).max(128).optional(),
+		steps: z.array(PipelineStepSchema).min(1).max(64),
 		sig: HmacSigSchema.optional(),
 	})
 	.strict();
@@ -197,7 +205,7 @@ export const ErrorFrameSchema = z
 export const WorkerToAgentFrameSchema = z.discriminatedUnion("type", [
 	RegisteredFrameSchema,
 	PingFrameSchema,
-	DeployFrameSchema,
+	PipelineFrameSchema,
 	ShutdownFrameSchema,
 	ErrorFrameSchema,
 ]);

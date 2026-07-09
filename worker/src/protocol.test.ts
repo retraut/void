@@ -187,47 +187,41 @@ describe("WorkerToAgent (worker → agent)", () => {
 		});
 	});
 
-	describe("deploy", () => {
-		it("accepts minimal deploy", () => {
+	describe("pipeline", () => {
+		it("accepts minimal pipeline", () => {
 			const r = WorkerToAgentFrameSchema.parse({
-				type: "deploy",
+				type: "pipeline",
 				deployment_id: "dep_1",
-				repo_url: "https://github.com/owner/repo",
-				ref: "main",
-				env: {},
-				port: 3000,
+				steps: [{ cmd: "git clone https://github.com/owner/repo .", timeout_s: 300 }],
 			});
-			expect(r.type).toBe("deploy");
+			expect(r.type).toBe("pipeline");
 		});
 
-		it("accepts full deploy with sig", () => {
+		it("accepts full pipeline with env + sig", () => {
 			const r = WorkerToAgentFrameSchema.parse({
-				type: "deploy",
+				type: "pipeline",
 				deployment_id: "dep_1",
-				repo_url: "https://github.com/owner/repo",
-				ref: "v1.0.0",
-				env: { NODE_ENV: "production" },
-				build_command: "npm ci",
-				serve_command: "node server.js",
-				port: 8080,
-				hostname: "my-app",
-				public_url: "https://my-app.example.com",
-				tunnel_token: "eyJh...",
-				tunnel_id: "tun_abc",
+				steps: [
+					{ cmd: "git clone https://github.com/owner/repo .", timeout_s: 300 },
+					{ cmd: "npm ci", timeout_s: 600 },
+					{ cmd: "node server.js", timeout_s: 300 },
+					{
+						cmd: "cloudflared tunnel --no-autoupdate run",
+						env: { TUNNEL_TOKEN: "eyJh..." },
+						timeout_s: 300,
+					},
+				],
 				sig: "v1.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			});
-			expect(r.type).toBe("deploy");
+			expect(r.type).toBe("pipeline");
 		});
 
-		it("rejects ref with shell metachars", () => {
+		it("rejects empty steps", () => {
 			expect(() =>
 				WorkerToAgentFrameSchema.parse({
-					type: "deploy",
+					type: "pipeline",
 					deployment_id: "dep_1",
-					repo_url: "https://github.com/owner/repo",
-					ref: "main; rm -rf /",
-					env: {},
-					port: 3000,
+					steps: [],
 				}),
 			).toThrow();
 		});
@@ -235,26 +229,20 @@ describe("WorkerToAgent (worker → agent)", () => {
 		it("rejects invalid sig format", () => {
 			expect(() =>
 				WorkerToAgentFrameSchema.parse({
-					type: "deploy",
+					type: "pipeline",
 					deployment_id: "dep_1",
-					repo_url: "https://github.com/owner/repo",
-					ref: "main",
-					env: {},
-					port: 3000,
+					steps: [{ cmd: "echo hi", timeout_s: 300 }],
 					sig: "not-a-valid-sig",
 				}),
 			).toThrow();
 		});
 
-		it("rejects port out of range", () => {
+		it("rejects step without cmd", () => {
 			expect(() =>
 				WorkerToAgentFrameSchema.parse({
-					type: "deploy",
+					type: "pipeline",
 					deployment_id: "dep_1",
-					repo_url: "https://github.com/owner/repo",
-					ref: "main",
-					env: {},
-					port: 70000,
+					steps: [{ timeout_s: 300 }],
 				}),
 			).toThrow();
 		});
