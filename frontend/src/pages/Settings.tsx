@@ -129,7 +129,7 @@ function CloudProviders({ data }: { data: SettingsData }) {
         >
           console.hetzner.cloud
         </a>{" "}
-        → Security → API Tokens
+        → Choose your project → Security → API Tokens
       </p>
       {!cred && data.env_has_hetzner_token && (
         <p className="mt-2 text-xs text-void-dim">Tip: env HETZNER_TOKEN is also set as a fallback for this deployment.</p>
