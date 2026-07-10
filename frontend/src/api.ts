@@ -7,6 +7,7 @@ import type {
   ServerRow,
   ServerSummary,
   SessionUser,
+  SettingsData,
 } from "./types";
 
 /**
@@ -94,8 +95,38 @@ export const api = {
     return true;
   },
 
+  settings: () => apiFetch<SettingsData>("/api/settings"),
+
   logout: () => fetch("/api/auth/logout", { credentials: "same-origin" }),
 };
+
+// Passkey (WebAuthn) helpers — the browser drives the ceremony, the
+// worker stores the credential. Mirrors the old inline <script> in ui.ts.
+export async function passkeyRegisterStart() {
+  const res = await fetch("/api/passkey/register/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "same-origin",
+  });
+  return res.json();
+}
+
+export async function passkeyRegisterFinish(name: string, response: unknown) {
+  const res = await fetch("/api/passkey/register/finish", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ name, response }),
+  });
+  return res.json();
+}
+
+export async function passkeyDelete(id: string) {
+  const fd = new FormData();
+  fd.append("id", id);
+  const res = await fetch("/api/passkey/delete", { method: "POST", body: fd, credentials: "same-origin" });
+  return res.ok;
+}
 
 /**
  * Subscribe to the server's SSE log stream. Returns an unsubscribe fn.

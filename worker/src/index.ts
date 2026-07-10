@@ -127,6 +127,7 @@ app.use("/api/*", async (c, next) => {
 		p === "/api/servers-ui" ||
 		p === "/api/me" ||
 		p === "/api/dashboard" ||
+		p === "/api/settings" ||
 		p === "/api/projects" ||
 		p === "/api/deployments" ||
 		p.startsWith("/api/servers/")
@@ -557,6 +558,31 @@ app.post("/settings/hetzner/delete", requireSession, async (c) => {
 	const { deleteProviderToken } = await import("./credentials");
 	await deleteProviderToken(c.env, c.get("user").id, "hetzner");
 	return c.redirect("/settings?toast=success&msg=Hetzner+token+deleted");
+});
+
+// GET /api/settings — aggregate data for the React Settings SPA page.
+// Mirrors what renderSettingsPage() assembled from SQL + KV + env.
+app.get("/api/settings", requireSession, async (c) => {
+	const user = c.get("user");
+	const fullUser = await c.env.void_db
+		.prepare("SELECT id, username, avatar_url, github_id, created_at FROM users WHERE id = ?")
+		.bind(user.id)
+		.first<{ id: string; username: string; avatar_url: string | null; github_id: string; created_at: number }>();
+	const { listProviderCredentials } = await import("./credentials");
+	const creds = await listProviderCredentials(c.env, user.id);
+	const hetznerCred = creds.find((x) => x.provider === "hetzner") ?? null;
+	const { listPasskeys } = await import("./passkey");
+	const passkeys = await listPasskeys(c.env, user.id);
+	const { listOverriddenSystemTokens, SYSTEM_KEYS } = await import("./system-settings");
+	const overridden = await listOverriddenSystemTokens(c.env);
+	return c.json({
+		user: fullUser,
+		hetzner_cred: hetznerCred,
+		passkeys,
+		system_keys: SYSTEM_KEYS,
+		overridden: Array.from(overridden),
+		env_has_hetzner_token: !!c.env.HETZNER_TOKEN,
+	});
 });
 
 // System settings — operator-managed tokens stored in the panel.

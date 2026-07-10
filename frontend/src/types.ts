@@ -131,3 +131,35 @@ export interface LogEntry {
   data: string;
   ts: number;
 }
+
+export interface SettingsData {
+  user: {
+    id: string;
+    username: string;
+    avatar_url: string | null;
+    github_id: string;
+    created_at: number;
+  } | null;
+  hetzner_cred: {
+    provider: string;
+    created_at: number;
+    verified_datacenters: number | null;
+  } | null;
+  passkeys: Array<{
+    id: string;
+    name: string;
+    created_at: number;
+    last_used_at: number | null;
+  }>;
+  system_keys: Array<{
+    key: string;
+    label: string;
+    description: string;
+    envVar: string;
+    placeholder: string;
+    textarea?: boolean;
+    warning?: string;
+  }>;
+  overridden: string[];
+  env_has_hetzner_token: boolean;
+}
