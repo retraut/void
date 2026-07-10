@@ -21,6 +21,29 @@ pub struct Metrics {
     pub cpu_percent: f64,
     pub memory_mb: f64,
     pub memory_percent: f64,
+    /// 1/5/15-min load average (read from /proc/loadavg on Linux).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_avg: Option<[f64; 3]>,
+    /// Number of logical CPU cores (from sysinfo). Used to normalize
+    /// load average into a per-core pressure value on the client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_count: Option<u32>,
+    /// Server pressure tier derived from per-core load average:
+    /// "light" | "medium" | "high" | "extra-high". Computed on the
+    /// agent where core count is authoritative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure_tier: Option<PressureTier>,
+}
+
+/// Pressure classification, kept in sync with the worker's Zod enum
+/// and the SPA's LoadTier. (De)serialized as a lowercase string.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PressureTier {
+    Light,
+    Medium,
+    High,
+    ExtraHigh,
 }
 
 /// Frames sent by the agent to the worker.

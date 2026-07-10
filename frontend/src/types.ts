@@ -10,6 +10,9 @@ export interface Metrics {
   cpu_percent: number;
   memory_mb: number;
   memory_percent: number;
+  load_avg: [number, number, number] | null;
+  cpu_count: number | null;
+  pressure_tier: "light" | "medium" | "high" | "extra-high" | null;
 }
 
 export interface ServerSummary {

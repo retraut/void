@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api";
 import { usePolling } from "../hooks";
-import { MetricBar, Skeleton, Spinner, StatusPill } from "../components/ui";
+import { LoadBadge, MetricBar, Skeleton, Spinner, StatusPill } from "../components/ui";
 import { clsx, timeAgo } from "../utils";
 import type { Metrics, ServerSummary } from "../types";
 
@@ -67,6 +67,14 @@ function ServerCard({ server }: { server: ServerSummary }) {
                 percent={metrics.memory_percent}
                 detail={`${metrics.memory_mb} MB`}
               />
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-void-dim">Load</span>
+                <LoadBadge
+                  load_avg={metrics.load_avg}
+                  cpu_count={metrics.cpu_count}
+                  tier={metrics.pressure_tier}
+                />
+              </div>
             </>
           ) : (
             <div className="flex items-center gap-2 text-xs text-void-dim">

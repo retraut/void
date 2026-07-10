@@ -85,10 +85,18 @@ pub(crate) async fn run_session(cfg: &Config, identity: &Arc<Identity>) -> anyho
             } => {
                 sys.refresh_cpu_usage();
                 sys.refresh_memory();
+                let load_avg = read_load_avg();
+                let cpu_count = Some(sys.cpus().len() as u32);
+                let pressure_tier = load_avg
+                    .and_then(|la| cpu_count.map(|c| classify_pressure(la[0], c)))
+                    .or(Some(crate::protocol::PressureTier::Light));
                 let metrics = Some(Metrics {
                     cpu_percent: sys.global_cpu_usage() as f64,
                     memory_mb: sys.used_memory() as f64 / 1024.0 / 1024.0,
                     memory_percent: sys.used_memory() as f64 / sys.total_memory() as f64 * 100.0,
+                    load_avg,
+                    cpu_count,
+                    pressure_tier,
                 });
                 let hb = AgentOut::Heartbeat {
                     timestamp: crypto::now_ts(),
@@ -245,4 +253,30 @@ async fn handle_incoming(
     }
 
     Ok(false)
+}
+
+/// Read the 1/5/15-min load average from /proc/loadavg (Linux only).
+/// Returns None on non-Linux or if the file can't be parsed.
+fn read_load_avg() -> Option<[f64; 3]> {
+    let raw = std::fs::read_to_string("/proc/loadavg").ok()?;
+    let mut parts = raw.split_whitespace();
+    let a = parts.next()?.parse::<f64>().ok()?;
+    let b = parts.next()?.parse::<f64>().ok()?;
+    let c = parts.next()?.parse::<f64>().ok()?;
+    Some([a, b, c])
+}
+
+/// Classify server pressure from the 1-min load average normalized by
+/// the number of logical CPU cores. Mirrors the SPA's `loadTier`.
+fn classify_pressure(load1: f64, cpu_count: u32) -> crate::protocol::PressureTier {
+    let per_core = load1 / cpu_count.max(1) as f64;
+    if per_core < 0.7 {
+        crate::protocol::PressureTier::Light
+    } else if per_core < 1.5 {
+        crate::protocol::PressureTier::Medium
+    } else if per_core < 3.0 {
+        crate::protocol::PressureTier::High
+    } else {
+        crate::protocol::PressureTier::ExtraHigh
+    }
 }

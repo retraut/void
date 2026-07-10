@@ -127,7 +127,7 @@ cmd_create() {
 		printf 'echo "config written"\n'
 		printf 'cat > /etc/systemd/system/void-agent.service <<SVC\n'
 		printf '[Unit]\nDescription=void agent\nAfter=network-online.target\nWants=network-online.target\n'
-		printf '[Service]\nExecStart=/usr/local/bin/void-agent\nRestart=always\nRestartSec=5\n'
+		printf '[Service]\nExecStart=/usr/local/bin/void-agent\nRestart=always\nRestartSec=5\nNice=-20\nOOMScoreAdjust=-1000\n'
 		printf '[Install]\nWantedBy=multi-user.target\n'
 		printf 'SVC\n'
 		printf 'systemctl daemon-reload\n'

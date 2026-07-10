@@ -76,17 +76,23 @@ VMCFG
 		#
 		# NOTE: OrbStack's systemd cannot actually start units
 		# (`systemctl start` hangs on a never-finishing job), so we
-		# launch the agent directly instead of via systemd. The
-		# systemd unit is still written by the bootstrap for
-		# documentation/parity with real VMs. We disable it first so
-		# its Restart=always doesn't spawn a competing process.
+		# Launch the agent. On real VMs (Hetzner) the bootstrap's
+		# `systemctl enable --now void-agent.service` starts it as a
+		# proper systemd unit (Restart=always, Nice=-20, OOMScoreAdjust=
+		# -1000). Under OrbStack, `systemctl start` hangs on the start
+		# job for long-lived services and `systemd-run --scope` needs a
+		# PTY it doesn't get over `orb run`, so we launch directly here
+		# and apply the SAME priority (highest nice, lowest OOM score =
+		# dies last) ourselves. The unit file is still written by the
+		# bootstrap for parity/documentation.
 		orb run -m "$LAB_VM_NAME" sudo systemctl disable --now void-agent 2>/dev/null || true
 		orb run -m "$LAB_VM_NAME" sudo rm -f /var/lib/void/session_token || true
-		log "starting void-agent on $LAB_VM_NAME (direct, no systemd)"
+		log "starting void-agent on $LAB_VM_NAME (Nice=-20, OOM=-1000)"
 		orb run -m "$LAB_VM_NAME" sudo bash -c '
 			pkill -9 void-agent 2>/dev/null || true
 			sleep 1
-			nohup /usr/local/bin/void-agent > /var/lib/void/agent.run.log 2>&1 &
+			nohup bash -c "echo -1000 > /proc/self/oom_score_adj; exec nice -n -20 /usr/local/bin/void-agent" \
+				> /var/lib/void/agent.run.log 2>&1 &
 			echo "started pid $!"
 		' || die "failed to start agent"
 	fi
