@@ -12,6 +12,11 @@
 		"nodejs_compat",
 		"global_fetch_strictly_public"
 	],
+	"assets": {
+		"directory": "/Users/retraut/Documents/null.sh/frontend/dist",
+		"not_found_handling": "single-page-application",
+		"binding": "FRONTEND"
+	},
 	"observability": {
 		"enabled": true
 	},

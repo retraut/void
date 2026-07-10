@@ -39,12 +39,6 @@ import {
 	SESSION_COOKIE_OPTS,
 } from "./auth";
 import {
-	renderServersPage,
-	renderProjectsPage,
-	renderDeploymentsPage,
-	renderDeploymentLogsPage,
-	renderDashboardPage,
-	renderSettingsPage,
 	renderNewServerPage,
 } from "./ui";
 
@@ -116,6 +110,12 @@ const bearerOnly = async (c: any, next: any) => {
 //                        enforce their own session check)
 // Note: Hono's `/api/*` matches `/api` itself too, so we guard with
 // an explicit check.
+//
+// The React SPA authenticates with the SESSION COOKIE (not a Bearer
+// token), so all its JSON API routes are excluded from Bearer auth
+// here and rely on `requireSession` (which reads the cookie). Bearer
+// auth stays on /api/* for programmatic/MCP clients (deploy frames,
+// agent WS negotiation, etc).
 app.use("/api/*", async (c, next) => {
 	const p = c.req.path;
 	if (p === "/api" || p === "/api/") return next();
@@ -124,7 +124,12 @@ app.use("/api/*", async (c, next) => {
 		p.startsWith("/api/webhooks/") ||
 		p.startsWith("/api/passkey/") ||
 		p.startsWith("/api/hetzner/") ||
-		p === "/api/servers-ui"
+		p === "/api/servers-ui" ||
+		p === "/api/me" ||
+		p === "/api/dashboard" ||
+		p === "/api/projects" ||
+		p === "/api/deployments" ||
+		p.startsWith("/api/servers/")
 	) return next();
 	return bearerOnly(c, next);
 });
@@ -411,25 +416,11 @@ app.get("/api/servers-ui", requireSession, async (c) => {
 });
 
 // ============================================================
-// UI pages (require session cookie)
-// ============================================================
-
-app.get("/dashboard", requireSession, async (c) => {
-	return renderDashboardPage(c, c.get("user"));
-});
-
-app.get("/servers", requireSession, async (c) => {
-	return renderServersPage(c, c.get("user"), {
-		kind: c.req.query("toast") || null,
-		msg: c.req.query("msg") || null,
-	});
-});
-
-// GET /servers/new — provisioning wizard. Fetches the Hetzner catalog
-// (cached in KV), renders location/size/image/name selectors.
-app.get("/servers/new", requireSession, async (c) => {
-	return renderNewServerPage(c, c.get("user"));
-});
+// UI pages are now served as a static SPA from frontend/dist
+// (wrangler.jsonc `assets` + single-page-application fallback).
+// These GET routes are removed; the React app handles all page
+// rendering. JSON API routes for the SPA live above under
+// "JSON API for the React SPA". Auth + form-action POST routes below.
 
 // POST /api/hetzner/catalog/refresh — force-refresh the Hetzner catalog
 // cache for the calling user's token. Hits the live API and re-populates
@@ -503,28 +494,8 @@ app.post("/servers/new", requireSession, async (c) => {
 	}
 });
 
-app.get("/projects", requireSession, async (c) => {
-	return renderProjectsPage(c, c.get("user"));
-});
-
-app.get("/deployments", requireSession, async (c) => {
-	const projectFilter = c.req.query("project") ?? null;
-	const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
-	const perPage = Math.min(100, Math.max(1, parseInt(c.req.query("per_page") || "20", 10) || 20));
-	return renderDeploymentsPage(c, c.get("user"), projectFilter, page, perPage);
-});
-
-app.get("/deployments/:id", requireSession, async (c) => {
-	return renderDeploymentLogsPage(c, c.get("user"), c.req.param("id"));
-});
-
-app.get("/settings", requireSession, async (c) => {
-	const flash = {
-		kind: c.req.query("toast") || null,
-		msg: c.req.query("msg") || null,
-	};
-	return renderSettingsPage(c, c.get("user"), flash);
-});
+// SPA handles /projects, /deployments, /deployments/:id, /settings rendering.
+// (GET page routes removed — served as static SPA from frontend/dist.)
 
 // Project switcher — sets the current_project_id cookie based on dropdown selection.
 // Empty value clears the cookie (returns to "All projects" view).
@@ -641,6 +612,194 @@ app.get("/servers/:id/metrics", requireSession, async (c) => {
 	const resp = await stub.fetch(`https://cell/${serverId}/metrics`);
 	const data = await resp.json();
 	return c.json(data);
+});
+
+// ============================================================
+// JSON API for the React SPA (session cookie auth)
+// These mirror the HTML-rendered pages but return JSON so the SPA
+// can hydrate without a full page render. Same auth as the UI pages.
+// ============================================================
+
+// GET /api/servers/:id — full server row for the detail page.
+app.get("/api/servers/:id", requireSession, async (c) => {
+	const serverId = c.req.param("id");
+	const user = c.get("user");
+	const row = await c.env.void_db
+		.prepare("SELECT * FROM servers WHERE id = ? AND user_id = ?")
+		.bind(serverId, user.id)
+		.first();
+	if (!row) return c.json({ error: "server not found" }, 404);
+	return c.json({ server: row });
+});
+
+// GET /api/servers/:id/logs — SSE log stream (session cookie auth).
+// Proxies the cell's /logs SSE through the bearer-authed DO forward,
+// so the browser only needs its session cookie (no bearer token).
+app.get("/api/servers/:id/logs", requireSession, async (c) => {
+	const serverId = c.req.param("id");
+	const user = c.get("user");
+	const server = await c.env.void_db
+		.prepare("SELECT id FROM servers WHERE id = ? AND user_id = ?")
+		.bind(serverId, user.id)
+		.first<{ id: string }>();
+	if (!server) return c.json({ error: "server not found" }, 404);
+	const deploymentId = c.req.query("deployment_id") || "";
+	const stub = c.env.void_cell.get(c.env.void_cell.idFromName(serverId));
+	const resp = await stub.fetch(`https://cell/${serverId}/logs?deployment_id=${encodeURIComponent(deploymentId)}`);
+	return new Response(resp.body, {
+		status: resp.status,
+		headers: {
+			"content-type": "text/event-stream",
+			"cache-control": "no-cache",
+			"connection": "keep-alive",
+		},
+	});
+});
+
+// GET /api/projects — list of projects for the current user.
+app.get("/api/projects", requireSession, async (c) => {
+	const user = c.get("user");
+	const { results } = await c.env.void_db
+		.prepare(
+			`SELECT p.id, p.slug, p.name, p.repo_url, p.default_branch, p.default_port,
+			        p.build_command, p.serve_command,
+			        s.id AS server_id, s.name AS server_name, s.status AS server_status,
+			        (SELECT COUNT(*) FROM deployments d WHERE d.project_id = p.id) AS deployment_count
+			 FROM projects p LEFT JOIN servers s ON s.id = p.server_id
+			 WHERE p.user_id = ?
+			 ORDER BY p.created_at DESC`,
+		)
+		.bind(user.id)
+		.all();
+	return c.json({ projects: results });
+});
+
+// GET /api/deployments — list with pagination + optional project filter.
+app.get("/api/deployments", requireSession, async (c) => {
+	const user = c.get("user");
+	const projectFilter = c.req.query("project") ?? null;
+	const page = Math.max(1, parseInt(c.req.query("page") || "1", 10) || 1);
+	const perPage = Math.min(100, Math.max(1, parseInt(c.req.query("per_page") || "20", 10) || 20));
+	const offset = (page - 1) * perPage;
+	const where = projectFilter
+		? "WHERE p.id = ? AND p.user_id = ?"
+		: "WHERE p.user_id = ?";
+	const countSql = `SELECT COUNT(*) AS n FROM deployments d LEFT JOIN projects p ON p.id = d.project_id ${where}`;
+	const listSql = `
+		SELECT d.id, d.ref, d.status, d.started_at, d.finished_at, d.duration_ms,
+		       d.hostname, d.public_url, d.commit_sha, d.error,
+		       p.name AS project_name, p.id AS project_id, p.slug AS project_slug,
+		       s.id AS server_id, s.name AS server_name
+		FROM deployments d
+		LEFT JOIN projects p ON p.id = d.project_id
+		LEFT JOIN servers s ON s.id = d.server_id
+		${where}
+		ORDER BY d.started_at DESC
+		LIMIT ? OFFSET ?`;
+	const countParams = projectFilter ? [projectFilter, user.id] : [user.id];
+	const listParams = projectFilter ? [projectFilter, user.id, perPage, offset] : [user.id, perPage, offset];
+	const { results: list } = await c.env.void_db.prepare(listSql).bind(...listParams).all();
+	const { results: countRes } = await c.env.void_db.prepare(countSql).bind(...countParams).all<{ n: number }>();
+	const total = countRes[0]?.n ?? 0;
+	return c.json({ deployments: list, page, per_page: perPage, total, total_pages: Math.ceil(total / perPage) });
+});
+
+// GET /api/deployments/:id — full deployment row + server/project info.
+app.get("/api/deployments/:id", requireSession, async (c) => {
+	const deploymentId = c.req.param("id");
+	const user = c.get("user");
+	const row = await c.env.void_db
+		.prepare(
+			`SELECT d.*, s.id AS server_id, s.name AS server_name, p.name AS project_name, p.id AS project_id
+			 FROM deployments d
+			 LEFT JOIN servers s ON s.id = d.server_id
+			 LEFT JOIN projects p ON p.id = d.project_id
+			 WHERE d.id = ? AND (p.user_id = ? OR s.user_id = ?)`,
+		)
+		.bind(deploymentId, user.id, user.id)
+		.first();
+	if (!row) return c.json({ error: "deployment not found" }, 404);
+	return c.json({ deployment: row });
+});
+
+// GET /api/dashboard — aggregate stats for the dashboard page.
+app.get("/api/dashboard", requireSession, async (c) => {
+	const user = c.get("user");
+	const servers = await c.env.void_db
+		.prepare("SELECT id, name, status, last_seen_at FROM servers WHERE user_id = ? ORDER BY created_at DESC")
+		.bind(user.id)
+		.all();
+	const projects = await c.env.void_db
+		.prepare("SELECT id, name, slug, repo_url FROM projects WHERE user_id = ? ORDER BY created_at DESC")
+		.bind(user.id)
+		.all();
+	const deployments24h = await c.env.void_db
+		.prepare(
+			"SELECT COUNT(*) AS n FROM deployments d LEFT JOIN projects p ON p.id = d.project_id WHERE p.user_id = ? AND d.started_at > unixepoch() - 86400",
+		)
+		.bind(user.id)
+		.first<{ n: number }>();
+	const recent = await c.env.void_db
+		.prepare(
+			`SELECT d.id, d.ref, d.status, d.started_at, p.name AS project_name
+			 FROM deployments d LEFT JOIN projects p ON p.id = d.project_id
+			 WHERE p.user_id = ?
+			 ORDER BY d.started_at DESC LIMIT 10`,
+		)
+		.bind(user.id)
+		.all();
+	return c.json({
+		servers: servers.results,
+		projects: projects.results,
+		deployments_24h: deployments24h?.n ?? 0,
+		recent_deployments: recent.results,
+	});
+});
+
+// GET /api/me — current session user (for the SPA shell).
+app.get("/api/me", requireSession, async (c) => {
+	return c.json({ user: c.get("user") });
+});
+
+// DELETE /api/servers/:id — delete a server (Hetzner + void row).
+// Reuses the same ownership check + best-effort Hetzner delete as the
+// HTML form action. Returns JSON so the SPA can update without reload.
+app.delete("/api/servers/:id", requireSession, async (c) => {
+	const user = c.get("user");
+	const serverId = c.req.param("id");
+	const env = c.env;
+	const srv = await env.void_db
+		.prepare("SELECT id, name, provider_server_id FROM servers WHERE id = ? AND user_id = ?")
+		.bind(serverId, user.id)
+		.first<{ id: string; name: string; provider_server_id: string | null }>();
+	if (!srv) return c.json({ error: "server not found" }, 404);
+	let hetznerMsg = "";
+	if (srv.provider_server_id) {
+		try {
+			const { getProviderToken } = await import("./credentials");
+			const { deleteServer } = await import("./hetzner");
+			const token = await getProviderToken(env, user.id, "hetzner");
+			if (token) {
+				await deleteServer(token, parseInt(srv.provider_server_id, 10));
+				hetznerMsg = "VM deleted in Hetzner.";
+			} else {
+				hetznerMsg = "No Hetzner token available — only void row removed.";
+			}
+		} catch (e: any) {
+			const msg = String(e?.message || e);
+			hetznerMsg = msg.includes("not found") || msg.includes("404")
+				? "VM was already gone in Hetzner."
+				: `Hetzner delete failed: ${msg} (void row still removed).`;
+		}
+	} else {
+		hetznerMsg = "No Hetzner ID — void row removed only.";
+	}
+	try {
+		const stub = env.void_cell.get(env.void_cell.idFromName(serverId));
+		await stub.fetch(`https://cell/${serverId}/teardown`, { method: "POST" });
+	} catch { /* best-effort */ }
+	await env.void_db.prepare("DELETE FROM servers WHERE id = ?").bind(serverId).run();
+	return c.json({ ok: true, message: `Server '${srv.name}' deleted. ${hetznerMsg}` });
 });
 
 // POST /servers/:id/delete — full delete (Hetzner + void).
@@ -923,10 +1082,22 @@ app.get("/api/passkey/list", requireSession, async (c) => {
 });
 
 // ============================================================
-// 404
+// 404 / SPA fallback — unmatched routes serve the static React app.
+// The frontend/dist is bound via wrangler.jsonc `assets` (FRONTEND
+// fetcher). API/WS routes are handled above; everything else boots the
+// React router from index.html. We fetch "/" (index.html) explicitly
+// because the assets binding does a literal file lookup, not SPA fallback.
 // ============================================================
 
-app.notFound((c) => c.json({ error: "Not found", path: c.req.path }, 404));
+app.notFound(async (c) => {
+	const assets = c.env.FRONTEND;
+	if (!assets) return c.json({ error: "Not found", path: c.req.path }, 404);
+	const index = await assets.fetch(new Request("http://localhost/"));
+	if (index.status < 400) {
+		return new Response(index.body, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+	}
+	return c.json({ error: "Not found", path: c.req.path }, 404);
+});
 
 // ============================================================
 // Worker entry

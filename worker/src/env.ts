@@ -33,4 +33,8 @@ export interface Env {
 
 	// Durable Objects
 	void_cell: DurableObjectNamespace;
+
+	// Static SPA assets (frontend/dist), served via wrangler.jsonc `assets`.
+	// When set, unmatched routes fall back to the SPA's index.html.
+	FRONTEND?: Fetcher;
 }
