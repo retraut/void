@@ -119,6 +119,18 @@ function CloudProviders({ data }: { data: SettingsData }) {
       {msg && (
         <div className={`mt-3 text-sm ${msg.kind === "ok" ? "text-void-ok" : "text-void-err"}`}>{msg.text}</div>
       )}
+      <p className="mt-2 text-xs text-void-dim">
+        Get a token at{" "}
+        <a
+          href="https://console.hetzner.cloud"
+          target="_blank"
+          rel="noopener"
+          className="text-[#ff5a6e] hover:underline"
+        >
+          console.hetzner.cloud
+        </a>{" "}
+        → Security → API Tokens
+      </p>
       {!cred && data.env_has_hetzner_token && (
         <p className="mt-2 text-xs text-void-dim">Tip: env HETZNER_TOKEN is also set as a fallback for this deployment.</p>
       )}
