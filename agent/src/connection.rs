@@ -211,6 +211,34 @@ async fn handle_incoming(
             info!("shutdown requested, exiting");
             std::process::exit(0);
         }
+        WorkerToAgent::TokenRotation {
+            session_token,
+            sig,
+        } => {
+            // Worker pushed a freshly-rotated session_token over the open WS.
+            // Verify HMAC (if AGENT_SHARED_SECRET is set), persist to disk, and
+            // keep the connection alive — no reconnect needed.
+            if let Some(secret) = &cfg.agent_shared_secret {
+                if let Some(sig_str) = &sig {
+                    let payload = crypto::token_rotation_canonical(&session_token);
+                    if !crypto::verify_hmac_sha256(secret, &payload, sig_str) {
+                        warn!("token_rotation HMAC verification FAILED — ignoring");
+                        return Ok(false);
+                    }
+                    info!("✓ token_rotation signature verified");
+                } else {
+                    warn!("token_rotation has no signature but AGENT_SHARED_SECRET is set — ignoring");
+                    return Ok(false);
+                }
+            }
+            let token_path = cfg.state_dir().join("session_token");
+            let _ = std::fs::create_dir_all(cfg.state_dir());
+            if let Err(e) = std::fs::write(&token_path, &session_token) {
+                warn!(error = %e, "failed to persist rotated session_token");
+                return Ok(false);
+            }
+            info!(token = %session_token, "session_token rotated (written to disk)");
+        }
         WorkerToAgent::Error { code, message } => {
             warn!(code = %code, message = ?message, "← server error frame");
         }

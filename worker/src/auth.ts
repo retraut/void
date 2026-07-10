@@ -33,6 +33,21 @@ export const SESSION_COOKIE_OPTS = {
 	sameSite: "Lax" as const,
 	maxAge: SESSION_TTL_SECONDS,
 };
+// Dev/test-lab cookie name + opts. The production name uses the
+// `__Host-` prefix, which REQUIRES the Secure flag — and a Secure
+// cookie is never sent over plain http://localhost. The test-lab runs
+// on http://127.0.0.1:8787 (no TLS), so we use a non-prefixed,
+// non-Secure cookie there, otherwise the dev-login session is dropped
+// by the browser and every protected page redirects to GitHub OAuth
+// (which 503s with "GITHUB_CLIENT_ID not configured" because the lab
+// has no GitHub app). Only used when VOID_DEV_AUTH is enabled.
+export const SESSION_COOKIE_NAME_DEV = "void_session_dev";
+export const SESSION_COOKIE_OPTS_DEV = {
+	path: "/",
+	httpOnly: true,
+	sameSite: "Lax" as const,
+	maxAge: SESSION_TTL_SECONDS,
+};
 // Cookie name uses __Host- prefix: browser enforces path=/, secure,
 // no Domain. Prevents subdomain cookie injection.
 export const SESSION_COOKIE_NAME = "__Host-void_session";
@@ -46,6 +61,7 @@ export const SESSION_COOKIE_NAME = "__Host-void_session";
 export async function createSession(
 	c: Context,
 	user: { id: string; username: string; avatar_url: string | null },
+	dev = false,
 ): Promise<void> {
 	const sessionId = crypto.randomUUID();
 	await c.env.ROUTES.put(
@@ -53,7 +69,11 @@ export async function createSession(
 		JSON.stringify({ user_id: user.id, username: user.username, avatar_url: user.avatar_url }),
 		{ expirationTtl: SESSION_TTL_SECONDS },
 	);
-	setCookie(c, SESSION_COOKIE_NAME, sessionId, SESSION_COOKIE_OPTS);
+	if (dev) {
+		setCookie(c, SESSION_COOKIE_NAME_DEV, sessionId, SESSION_COOKIE_OPTS_DEV);
+	} else {
+		setCookie(c, SESSION_COOKIE_NAME, sessionId, SESSION_COOKIE_OPTS);
+	}
 }
 
 /**
@@ -122,7 +142,13 @@ interface GithubTokenResponse {
 
 export async function getSessionUser(c: Context): Promise<{ id: string; username: string; avatar_url: string | null } | null> {
 	const env = c.env;
-	const sessionId = getCookie(c, SESSION_COOKIE_NAME);
+	// The test-lab (VOID_DEV_AUTH) sets a non-Secure, non-prefixed cookie
+	// so it survives over plain http://localhost. Try it first when the
+	// dev bypass is enabled, falling back to the production cookie.
+	let sessionId = env.VOID_DEV_AUTH === "1" || env.VOID_DEV_AUTH === "true"
+		? getCookie(c, SESSION_COOKIE_NAME_DEV)
+		: undefined;
+	if (!sessionId) sessionId = getCookie(c, SESSION_COOKIE_NAME);
 	if (!sessionId) return null;
 	const session = await env.ROUTES.get(`session:${sessionId}`, "json") as { user_id: string; username: string; avatar_url: string | null } | null;
 	if (!session) return null;
@@ -370,10 +396,21 @@ export async function handleAuthLogout(c: Context): Promise<Response> {
 	if (sessionId) {
 		await env.ROUTES.delete(`session:${sessionId}`);
 	}
+	// Clear the dev cookie too (test-lab runs over plain http://localhost
+	// with a non-Secure, non-prefixed cookie — see createSession dev path).
+	const devSessionId = env.VOID_DEV_AUTH === "1" || env.VOID_DEV_AUTH === "true"
+		? getCookie(c, SESSION_COOKIE_NAME_DEV)
+		: undefined;
+	if (devSessionId) {
+		await env.ROUTES.delete(`session:${devSessionId}`);
+	}
 	// Hono's deleteCookie constructs an Expires=Thu, 01 Jan 1970 + Max-Age=0
 	// Set-Cookie with the same attributes (path, secure, etc.) as setCookie.
 	// This is the RFC-compliant way to delete a cookie — attributes must match.
 	deleteCookie(c, SESSION_COOKIE_NAME, SESSION_COOKIE_OPTS);
+	if (devSessionId) {
+		deleteCookie(c, SESSION_COOKIE_NAME_DEV, SESSION_COOKIE_OPTS_DEV);
+	}
 	c.header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 	c.header("Pragma", "no-cache");
 

@@ -16,7 +16,7 @@
  */
 import type { Context } from "hono";
 import type { Env } from "./env";
-import { createSession, SESSION_COOKIE_NAME } from "./auth";
+import { createSession, SESSION_COOKIE_NAME_DEV } from "./auth";
 
 export async function handleDevLogin(c: Context): Promise<Response> {
 	if (c.env.VOID_DEV_AUTH !== "1" && c.env.VOID_DEV_AUTH !== "true") {
@@ -51,7 +51,7 @@ export async function handleDevLogin(c: Context): Promise<Response> {
 		)
 		.bind(userId, `dev_${username}`, username, now, now)
 		.run();
-	await createSession(c, { id: userId, username, avatar_url: null });
+	await createSession(c, { id: userId, username, avatar_url: null }, true);
 	const returnTo = String(body?.returnTo || "/dashboard");
 	// Form posts land here too; return HTML for them, JSON for fetch.
 	const accept = c.req.header("accept") || "";
@@ -84,5 +84,5 @@ ${DEV_AUTH_BUTTON_MARKER}
 
 // Re-export so dev-entry can read the same cookie name when it
 // wants to clear it on dev-logout.
-export { SESSION_COOKIE_NAME };
+export { SESSION_COOKIE_NAME_DEV };
 

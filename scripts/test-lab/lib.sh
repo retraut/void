@@ -20,8 +20,17 @@ LAB_CLOUD_INIT="$LAB_DIR/user-data.sh"
 LAB_VM_NAME="${VOID_LAB_VM_NAME:-void-lab}"
 LAB_AGENT_PORT="${VOID_LAB_AGENT_PORT:-8787}"
 
+# Cross-compile target for the amd64 OrbStack VM. Matches release.yml
+# (which builds on ubuntu-latest, no zig needed there — system gcc).
+LAB_AGENT_TARGET="${VOID_LAB_AGENT_TARGET:-x86_64-unknown-linux-gnu}"
+
 # API base URL (host where wrangler dev listens). Override with VOID_LAB_API.
 LAB_API="${VOID_LAB_API:-http://127.0.0.1:$LAB_AGENT_PORT}"
+
+# Strip // and /* */ comments from a jsonc file so jq can parse it.
+strip_jsonc_comments() {
+	perl -0777 -pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g' "$1"
+}
 
 # --- colors (only when stdout is a TTY) ---
 if [ -t 1 ]; then
@@ -54,6 +63,12 @@ check_prereqs() {
 	require_cmd wrangler "pnpm install in worker/"
 	require_cmd jq      "brew install jq"
 	require_cmd cargo   "rustup toolchain install stable"
+	# Cross-compile the agent for the amd64 VM without a gcc
+	# toolchain: zig provides the linker, cargo-zigbuild drives it.
+	require_cmd zig     "brew install zig"
+	# cargo-zigbuild ships as a standalone binary (not a `cargo`
+	# subcommand in PATH here), so check for it directly.
+	command -v cargo-zigbuild >/dev/null 2>&1 || die "cargo-zigbuild not installed. Run: cargo install cargo-zigbuild"
 }
 
 # --- wrangler lifecycle ---
@@ -78,7 +93,7 @@ wrangler_start() {
 	(
 		cd "$LAB_REPO_ROOT/worker"
 		# nohup so the dev process survives us exiting
-		nohup wrangler dev --port "$LAB_AGENT_PORT" --ip 0.0.0.0 \
+		nohup wrangler dev --config wrangler.dev.jsonc --port "$LAB_AGENT_PORT" --ip 0.0.0.0 \
 			> "$LAB_LOG" 2>&1 &
 		echo $! > "$LAB_PID"
 	)
@@ -151,6 +166,22 @@ api_servers() {
 	curl -fsS -H "Authorization: Bearer $bearer" "$LAB_API/api/servers"
 }
 
+# Delete a stale server row directly from the local D1 SQLite.
+# The panel's delete route needs a session cookie; for the test-lab
+# we can delete via wrangler d1 (which talks to the same local DB).
+# Used by up.sh to avoid accumulating dead 'active' rows across
+# wrangler dev restarts (each restart needs a fresh setup_token).
+api_deregister() {
+	local sid="$1"
+	[ -n "$sid" ] || return 0
+	local db
+	db="$(strip_jsonc_comments "$LAB_REPO_ROOT/worker/wrangler.dev.jsonc" 2>/dev/null \
+		| jq -r '.d1_databases[0].database_name // "void-db"')"
+	( cd "$LAB_REPO_ROOT/worker" \
+		&& wrangler d1 execute "$db" --local --yes \
+			--command "DELETE FROM servers WHERE id = '$sid';" > /dev/null 2>&1 ) || true
+}
+
 # Resolve the host IP that an OrbStack VM should use to reach
 # the wrangler dev. The control plane's /api/servers/register
 # derives api_base from the request URL, which is 127.0.0.1
@@ -158,17 +189,32 @@ api_servers() {
 # inside the VM, 127.0.0.1 is the VM itself, not the host.
 #
 # We rewrite the api_base in the registration response to point
-# at the host's OrbStack-bridge IP. The default gateway (`.1`)
-# is the NAT bridge, not the host — scan reachable neighbors for
-# the one that actually has port $LAB_AGENT_PORT open.
+# at the host's OrbStack-bridge IP. The host lives in the same
+# /24 subnet as the VM (e.g. VM=192.168.139.118, host=192.168.139.3).
+# Scan the subnet for the address that actually answers on
+# $LAB_AGENT_PORT — that's the macOS host running wrangler dev.
+# Try the common OrbStack host offsets (.3/.2) first, then the
+# whole /24 in parallel to bound the worst-case runtime.
 host_ip_for_vm() {
 	orb run -m "$LAB_VM_NAME" sh -c '
-		for ip in $(ip neigh show | awk "/REACHABLE/ {print \$1}"); do
+		vm_ip=$(ip -4 addr show eth0 | awk "/inet / {print \$2}")
+		base=$(echo "$vm_ip" | cut -d. -f1-3)
+		vm_last=$(echo "$vm_ip" | cut -d. -f4)
+		for last in 3 2 1; do
+			[ "$last" = "$vm_last" ] && continue
+			ip="$base.$last"
 			code=$(curl -s -o /dev/null -w "%{http_code}" \
 				--connect-timeout 1 "http://$ip:'"$LAB_AGENT_PORT"'/health" 2>/dev/null)
 			[ "$code" = "200" ] && echo "$ip" && exit 0
 		done
-	' 2>/dev/null
+		for last in $(seq 1 254); do
+			[ "$last" = "$vm_last" ] && continue
+			ip="$base.$last"
+			curl -s -o /dev/null --connect-timeout 1 \
+				"http://$ip:'"$LAB_AGENT_PORT"'/health" 2>/dev/null && echo "$ip" &
+		done
+		wait
+	' 2>/dev/null | head -1
 }
 
 # Rewrite a registration.json in-place to swap the api_base
@@ -200,7 +246,6 @@ api_base = "${new_api_base}"
 server_id = "${sid}"
 setup_token = "${st}"
 state_dir = "/var/lib/void"
-public_url_template = "https://pr-{port}.loca.lt"
 TOML
 )
 

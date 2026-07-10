@@ -9,7 +9,7 @@
  * - Deploy messages are HMAC-signed with AGENT_SHARED_SECRET (signed by Worker,
  *   verified by agent before executing commands)
  * - setup_token is one-time: validated against D1 on first register, then replaced with persistent session_token
- * - session_token is persistent for reconnects (rotated manually or on logout)
+ * - session_token is persistent for reconnects (rotated hourly, pushed to the agent over the open WS)
  *
  * Protocol: all WS frames are validated via Zod schemas in `./protocol`.
  * See docs/PROTOCOL.md for the wire format.
@@ -18,6 +18,11 @@
 import { Env } from "./env";
 import { timingSafeEqual } from "./auth";
 import { parseAgentFrame, type AgentOutFrame, type WorkerToAgentFrame, type Metrics } from "./protocol";
+
+// How often to rotate the agent's session_token. The Worker pushes a new
+// token to the still-connected agent (signed, over the open WS) without
+// disconnecting it. 1h is the default; the test-lab overrides via env.
+const ROTATION_INTERVAL_SECONDS = 60 * 60;
 
 export class VoidCell {
 	private state: DurableObjectState;
@@ -172,34 +177,41 @@ export class VoidCell {
 			});
 		}
 
-		// Internal: rotate session_token (invalidates the old one)
-		if (url.pathname.endsWith("/rotate-session") && request.method === "POST") {
-			// Path is /:server_id/rotate-session (DO strips the host)
-			const m = url.pathname.match(/^\/([^/]+)\/rotate-session$/);
-			const serverIdFromUrl = m?.[1] || this.serverId;
-			if (!serverIdFromUrl) {
-				return Response.json({ error: "no server_id" }, { status: 400 });
-			}
-			const newToken = `sess_${crypto.randomUUID().replace(/-/g, "")}`;
-			const now = Math.floor(Date.now() / 1000);
-			await this.env.void_db
-				.prepare(
-					"UPDATE servers SET session_token = ?, session_token_created_at = ? WHERE id = ?",
-				)
-				.bind(newToken, now, serverIdFromUrl)
-				.run();
-			// Disconnect the current WS so the agent must re-register with the new token
-			try { this.ws?.close(1000, "session_token rotated"); } catch {}
-			this.ws = null;
-			this.registered = false;
-			return Response.json({
-				ok: true,
-				session_token: newToken,
-				note: "Agent must re-register with this new session_token. Update <state_dir>/session_token on the agent host.",
-			});
-		}
-
 		return new Response("Not found in cell", { status: 404 });
+	}
+
+	/**
+	 * Rotate the agent's session_token if it's older than ROTATION_INTERVAL_SECONDS.
+	 * Pushes the new token to the still-connected agent (HMAC-signed over the open
+	 * WS) so it can persist it to disk without reconnecting. This is the automatic
+	 * replacement for the old manual "rotate" button — no human-in-the-loop, no
+	 * agent restart, no editing files on the host.
+	 */
+	private async rotateTokenIfDue(): Promise<void> {
+		if (!this.serverId || !this.ws) return;
+		const row = await this.env.void_db
+			.prepare("SELECT session_token, session_token_created_at FROM servers WHERE id = ?")
+			.bind(this.serverId)
+			.first<{ session_token: string | null; session_token_created_at: number | null }>();
+		if (!row || !row.session_token || !row.session_token_created_at) return;
+		const age = Math.floor(Date.now() / 1000) - row.session_token_created_at;
+		if (age < ROTATION_INTERVAL_SECONDS) return;
+
+		const newToken = `sess_${crypto.randomUUID().replace(/-/g, "")}`;
+		const now = Math.floor(Date.now() / 1000);
+		await this.env.void_db
+			.prepare("UPDATE servers SET session_token = ?, session_token_created_at = ? WHERE id = ?")
+			.bind(newToken, now, this.serverId)
+			.run();
+
+		// Build + HMAC-sign the token_rotation frame (same scheme as pipeline).
+		const frame: WorkerToAgentFrame = { type: "token_rotation", session_token: newToken };
+		if (this.env.AGENT_SHARED_SECRET) {
+			const { signWithAgentSecret } = await import("./security");
+			const canonical = JSON.stringify({ type: "token_rotation", session_token: newToken });
+			frame.sig = await signWithAgentSecret(this.env.AGENT_SHARED_SECRET, canonical);
+		}
+		try { this.ws.send(JSON.stringify(frame)); } catch {}
 	}
 
 	// Hibernation API: required methods on the Durable Object class
@@ -283,9 +295,9 @@ export class VoidCell {
 					.prepare(
 						`UPDATE servers SET setup_token = NULL, setup_token_consumed_at = ?,
 						                  session_token = ?, session_token_created_at = ?,
-						                  agent_public_key = ?, status = 'active' WHERE id = ?`,
+						                  agent_public_key = ?, last_seen_at = ?, status = 'active' WHERE id = ?`,
 					)
-					.bind(now, newSessionToken, now, msg.public_key, serverId)
+					.bind(now, newSessionToken, now, msg.public_key, now, serverId)
 					.run();
 				this.registered = true;
 				this.serverId = serverId;
@@ -332,6 +344,9 @@ export class VoidCell {
 			if (msg.metrics) {
 				this.latestMetrics = msg.metrics;
 			}
+			// Periodically rotate the session_token and push it to the
+			// agent over this still-open WS (no disconnect needed).
+			await this.rotateTokenIfDue();
 			return;
 		}
 

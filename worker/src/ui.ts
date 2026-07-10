@@ -433,6 +433,14 @@ function html(
   .sc-project{color:var(--hetzner) !important;border-color:rgba(213,12,45,0.25) !important;background:rgba(213,12,45,0.06) !important}
   .sc-tunnel{color:var(--accent) !important;border-color:rgba(0,255,136,0.25) !important;background:rgba(0,255,136,0.06) !important}
   .sc-specs-hw{color:var(--text-2) !important;background:linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01)) !important;font-family:ui-monospace,monospace !important;font-variant-numeric:tabular-nums}
+  .sc-provider{color:var(--text-2) !important;background:rgba(255,255,255,0.03) !important;border-color:var(--border) !important;font-family:ui-monospace,monospace !important}
+  /* Latest deployment line on the card — repo @ ref (sha) · status · age */
+  .sc-deploy{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+  .sc-deploy code{background:transparent;padding:0;color:var(--text-2);font-size:0.78rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sc-deploy-ref{color:var(--text-muted);font-size:0.76rem;font-family:ui-monospace,monospace}
+  .sc-deploy-sha{color:var(--text-dim);font-size:0.72rem;font-family:ui-monospace,monospace}
+  .sc-deploy-status{font-size:0.66rem !important;padding:1px 7px !important;text-transform:capitalize;letter-spacing:0.02em}
+  .sc-deploy-age{color:var(--text-dim);font-size:0.72rem;margin-left:auto;font-family:ui-monospace,monospace}
   .sc-meta{display:flex;flex-direction:column;gap:5px;padding-top:8px;border-top:1px solid var(--bg-hover)}
   .sc-meta-row{display:flex;align-items:center;justify-content:space-between;font-size:0.8rem}
   .sc-meta-label{color:var(--text-dim);text-transform:uppercase;letter-spacing:0.04em;font-size:0.7rem;font-weight:600}
@@ -786,8 +794,18 @@ export async function renderServersPage(
 			`SELECT s.id, s.name, s.provider, s.status, s.region, s.size, s.last_seen_at, s.tunnel_id IS NOT NULL AS has_tunnel,
 			        s.hetzner_project_name, s.provider_server_id, s.ip_address,
 			        s.created_at,
-			        (SELECT COUNT(*) FROM deployments d WHERE d.server_id = s.id) AS deployment_count
+			        (SELECT COUNT(*) FROM deployments d WHERE d.server_id = s.id) AS deployment_count,
+			        p.repo_url AS project_repo_url,
+			        (SELECT ref FROM deployments d
+			           WHERE d.server_id = s.id ORDER BY d.started_at DESC LIMIT 1) AS last_deploy_ref,
+			        (SELECT commit_sha FROM deployments d
+			           WHERE d.server_id = s.id ORDER BY d.started_at DESC LIMIT 1) AS last_deploy_commit,
+			        (SELECT status FROM deployments d
+			           WHERE d.server_id = s.id ORDER BY d.started_at DESC LIMIT 1) AS last_deploy_status,
+			        (SELECT started_at FROM deployments d
+			           WHERE d.server_id = s.id ORDER BY d.started_at DESC LIMIT 1) AS last_deploy_at
 			 FROM servers s
+			 LEFT JOIN projects p ON p.server_id = s.id
 			 WHERE s.user_id = ?
 			 ORDER BY s.created_at DESC`,
 		)
@@ -797,6 +815,9 @@ export async function renderServersPage(
 			last_seen_at: number | null; has_tunnel: number; deployment_count: number;
 			hetzner_project_name: string | null; provider_server_id: string | null;
 			ip_address: string | null; created_at: number;
+			project_repo_url: string | null;
+			last_deploy_ref: string | null; last_deploy_commit: string | null;
+			last_deploy_status: string | null; last_deploy_at: number | null;
 		}>();
 
 	// Pre-fetch live metrics from DO for active servers (parallel, won't slow down the rest of the page).
@@ -858,6 +879,15 @@ ${results.length === 0
       else elapsed = Math.floor(d/3600) + 'h';
     }
     var hw = (s.cpu != null && s.memory != null) ? '<span class="sc-specs-hw">' + s.cpu + ' vCPU · ' + s.memory + ' GB · ' + (s.disk != null ? s.disk : '?') + ' GB SSD</span>' : '';
+    var providerLabel = (s.provider === 'manual' || !s.provider) ? 'manual' : s.provider;
+    var repo = s.project_repo_url ? s.project_repo_url.replace(/^https?:\/\/(github\.com\/)?/, '').replace(/\.git$/, '') : null;
+    var deployLine = s.last_deploy_ref ? '<div class="sc-meta-row"><span class="sc-meta-label">Deployed</span><span class="sc-deploy">' +
+        (repo ? '<code class="mono">' + repo + '</code>' : '') +
+        '<span class="sc-deploy-ref">' + (s.last_deploy_ref || '') + '</span>' +
+        (s.last_deploy_commit ? '<span class="sc-deploy-sha mono">' + String(s.last_deploy_commit).slice(0,7) + '</span>' : '') +
+        '<span class="status status-' + (s.last_deploy_status || 'queued') + ' sc-deploy-status">' + (s.last_deploy_status || 'queued') + '</span>' +
+        '<span class="sc-deploy-age">' + fmtTimeAgo(s.last_deploy_at) + '</span>' +
+      '</span></div>' : '';
     return '<div class="server-card' + (isProv ? ' provisioning' : '') + '" data-id="' + s.id + '">' +
       '<div class="sc-head">' +
         '<div class="sc-name">' + (s.name || '—') + '</div>' +
@@ -868,12 +898,15 @@ ${results.length === 0
         (s.region ? '<span>' + s.region + '</span>' : '') +
         (s.size ? '<span>' + s.size + '</span>' : '') +
         hw +
+        '<span class="sc-provider">' + providerLabel + '</span>' +
         (s.hetzner_project_name ? '<span class="sc-project">' + s.hetzner_project_name + '</span>' : '') +
       '</div>' +
       '<div class="sc-meta">' +
         (s.ip_address ? '<div class="sc-meta-row"><span class="sc-meta-label">IP</span><code class="mono">' + s.ip_address + '</code></div>' : '') +
-        '<div class="sc-meta-row"><span class="sc-meta-label">Last seen</span><span>' + fmtTimeAgo(s.last_seen_at) + '</span></div>' +
+        deployLine +
         '<div class="sc-meta-row"><span class="sc-meta-label">Deploys</span><span>' + s.deployment_count + '</span></div>' +
+        '<div class="sc-meta-row"><span class="sc-meta-label">Last seen</span><span>' + fmtTimeAgo(s.last_seen_at) + '</span></div>' +
+        '<div class="sc-meta-row"><span class="sc-meta-label">Created</span><span>' + fmtTimeAgo(s.created_at) + '</span></div>' +
         '<div class="sc-metrics" style="display:none" data-id="' + s.id + '">' +
           '<div class="sc-meta-row"><span class="sc-meta-label">CPU</span><span class="sc-metrics-cpu-' + s.id + '">\u2014</span></div>' +
           '<div class="sc-meta-row"><span class="sc-meta-label">Mem</span><span class="sc-metrics-mem-' + s.id + '">\u2014</span></div>' +
@@ -882,7 +915,6 @@ ${results.length === 0
       (isProv ? '<div class="sc-progress-wait"><span class="sc-spinner"></span>Waiting for agent to register…<span class="sc-elapsed">' + elapsed + '</span></div>' : '') +
       '<div class="sc-actions">' +
         (s.provider_server_id && s.status !== 'destroyed' ? '<button class="btn btn-secondary sc-sync" data-id="' + s.id + '" style="padding:5px 10px;font-size:0.78rem">⟳ Sync</button>' : '') +
-        '<button class="btn btn-secondary sc-rotate" data-id="' + s.id + '" data-name="' + (s.name || '').replace(/"/g, '&quot;') + '" style="padding:5px 10px;font-size:0.78rem">rotate</button>' +
         '<button class="btn btn-danger sc-delete" data-id="' + s.id + '" data-name="' + (s.name || '').replace(/"/g, '&quot;') + '" style="padding:5px 10px;font-size:0.78rem">delete</button>' +
       '</div>' +
     '</div>';
@@ -931,7 +963,7 @@ ${results.length === 0
       el.querySelector('.sc-metrics-mem-' + serverId).textContent = data.metrics.memory_percent.toFixed(1) + '% (' + data.metrics.memory_mb.toFixed(0) + ' MB)';
     } catch (e) {}
   }
-  // Click handlers for sync/rotate (delegated)
+  // Click handlers for sync/delete (delegated)
   grid.addEventListener('click', function(e){
     var t = e.target;
     if (t.classList.contains('sc-sync')) {
@@ -941,11 +973,6 @@ ${results.length === 0
       fetch('/servers/' + t.dataset.id + '/sync', { method: 'POST', body: fd })
         .then(function(r){ if (r.ok) location.reload(); else { t.disabled = false; t.textContent = '⟳ Sync'; alert('Sync failed'); } })
         .catch(function(){ t.disabled = false; t.textContent = '⟳ Sync'; });
-    }
-    if (t.classList.contains('sc-rotate')) {
-      if (!confirm('Rotate session token for ' + t.dataset.name + '? The agent will be disconnected and must re-register with the new token.')) {
-        e.preventDefault();
-      }
     }
     if (t.classList.contains('sc-delete')) {
       if (!confirm("Delete server '" + t.dataset.name + "'? This will try to delete the VM in Hetzner and remove it from void.")) {
@@ -1007,14 +1034,31 @@ ${results.length === 0
  */
 function renderServerCard(s: {
 	id: string; name: string; provider: string; status: string; region: string; size: string;
-	last_seen_at: number | null; has_tunnel: number; deployment_count: number;
+	last_seen_at: number | null; created_at: number; has_tunnel: number; deployment_count: number;
 	hetzner_project_name: string | null; provider_server_id: string | null;
-	ip_address: string | null; created_at: number;
-	cpu: number | null; memory: number | null; disk: number | null;
+	ip_address: string | null; cpu: number | null; memory: number | null; disk: number | null;
+	project_repo_url: string | null;
+	last_deploy_ref: string | null; last_deploy_commit: string | null;
+	last_deploy_status: string | null; last_deploy_at: number | null;
 }, metrics?: Metrics): string {
 	const isProvisioning = s.status === "provisioning";
 	const elapsed = isProvisioning && s.created_at ? timeAgo(s.created_at) : "";
 	const hasSpecs = s.cpu != null && s.memory != null;
+	const providerLabel = s.provider === "manual" ? "manual" : (s.provider || "—");
+	// Latest deployment summary — mirrors what Vercel/Coolify/Railway show
+	// on a server/deployment card: what's deployed + its status + when.
+	const deployRepo = s.project_repo_url
+		? s.project_repo_url.replace(/^https?:\/\/(github\.com\/)?/, "").replace(/\.git$/, "")
+		: null;
+	const deployLine = s.last_deploy_ref
+		? `<div class="sc-meta-row"><span class="sc-meta-label">Deployed</span><span class="sc-deploy">
+				${deployRepo ? `<code class="mono">${escape(deployRepo)}</code>` : ""}
+				<span class="sc-deploy-ref">${escape(s.last_deploy_ref)}</span>
+				${s.last_deploy_commit ? `<span class="sc-deploy-sha mono">${escape(s.last_deploy_commit.slice(0, 7))}</span>` : ""}
+				<span class="status status-${escape(s.last_deploy_status || "queued")} sc-deploy-status">${escape(s.last_deploy_status || "queued")}</span>
+				<span class="sc-deploy-age">${timeAgo(s.last_deploy_at)}</span>
+			</span></div>`
+		: "";
 	return `<div class="server-card${isProvisioning ? " provisioning" : ""}" data-id="${escape(s.id)}">
 		<div class="sc-head">
 			<div>
@@ -1028,13 +1072,16 @@ function renderServerCard(s: {
 			${s.region ? `<span>${escape(s.region)}</span>` : ""}
 			${s.size ? `<span>${escape(s.size)}</span>` : ""}
 			${hasSpecs ? `<span class="sc-specs-hw" title="Specs">${s.cpu} vCPU · ${s.memory} GB · ${s.disk ?? "?"} GB SSD</span>` : ""}
+			<span class="sc-provider" title="Provider">${escape(providerLabel)}</span>
 			${s.hetzner_project_name ? `<span class="sc-project">${escape(s.hetzner_project_name)}</span>` : ""}
 			${s.has_tunnel ? `<span class="sc-tunnel" title="Cloudflare tunnel active">↗ tunnel</span>` : ""}
 		</div>
 		<div class="sc-meta">
 			${s.ip_address ? `<div class="sc-meta-row"><span class="sc-meta-label">IP</span><code class="mono">${escape(s.ip_address)}</code></div>` : ""}
-			<div class="sc-meta-row"><span class="sc-meta-label">Last seen</span><span>${timeAgo(s.last_seen_at)}</span></div>
+			${deployLine}
 			<div class="sc-meta-row"><span class="sc-meta-label">Deploys</span><span>${s.deployment_count}</span></div>
+			<div class="sc-meta-row"><span class="sc-meta-label">Last seen</span><span>${timeAgo(s.last_seen_at)}</span></div>
+			<div class="sc-meta-row"><span class="sc-meta-label">Created</span><span>${timeAgo(s.created_at)}</span></div>
 			<div class="sc-metrics" style="${metrics ? "" : "display:none"}" data-id="${escape(s.id)}">
 				<div class="sc-meta-row"><span class="sc-meta-label">CPU</span><span class="sc-metrics-cpu-${escape(s.id)}">${metrics ? `${metrics.cpu_percent.toFixed(1)}%` : "\u2014"}</span></div>
 				<div class="sc-meta-row"><span class="sc-meta-label">Mem</span><span class="sc-metrics-mem-${escape(s.id)}">${metrics ? `${metrics.memory_percent.toFixed(1)}% (${Math.round(metrics.memory_mb)} MB)` : "\u2014"}</span></div>
@@ -1045,9 +1092,6 @@ function renderServerCard(s: {
 			${s.provider_server_id && s.status !== "destroyed" ? `<form method="POST" action="/servers/${escape(s.id)}/sync" style="display:inline" title="Re-check status with Hetzner">
 				<button class="btn btn-secondary" type="submit" style="padding:5px 10px;font-size:0.78rem">⟳ Sync</button>
 			</form>` : ""}
-			<form method="POST" action="/servers/${escape(s.id)}/rotate-session" style="display:inline">
-				<button class="btn btn-secondary" type="submit" style="padding:5px 10px;font-size:0.78rem">rotate</button>
-			</form>
 			<form method="POST" action="/servers/${escape(s.id)}/delete" style="display:inline" onsubmit="return confirm('Delete server ${escape(s.name)}? This will try to delete the VM in Hetzner and remove it from void.')">
 				<button class="btn btn-danger" type="submit" style="padding:5px 10px;font-size:0.78rem">delete</button>
 			</form>

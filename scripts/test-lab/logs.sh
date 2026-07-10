@@ -34,6 +34,6 @@ exec curl -fsSN \
 	-H "Accept: text/event-stream" \
 	"$URL" | awk '
 		/^data: / { sub(/^data: /, ""); print; fflush() }
-		/^$/      { /* SSE event terminator, no-op */ }
+		/^$/ { next }
 		!/^data: / && !/^$/ && !/^event: / && !/^id: / { print; fflush() }
 	'

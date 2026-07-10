@@ -192,6 +192,22 @@ export const ShutdownFrameSchema = z
 	})
 	.strict();
 
+/**
+ * Token rotation — push a freshly-rotated session_token to an already
+ * connected agent without disconnecting the WS. Sent periodically (hourly)
+ * by the VoidCell DO. HMAC-signed with AGENT_SHARED_SECRET (same scheme as
+ * `pipeline`). Agent writes the new token to <state_dir>/session_token and
+ * uses it for future reconnects. Mirrors `WorkerToAgent::TokenRotation` in
+ * `agent/src/protocol.rs`. Canonical payload: { type, session_token }.
+ */
+export const TokenRotationFrameSchema = z
+	.object({
+		type: z.literal("token_rotation"),
+		session_token: TokenSchema,
+		sig: HmacSigSchema.optional(),
+	})
+	.strict();
+
 /** Error frame sent to the other side before closing. */
 export const ErrorFrameSchema = z
 	.object({
@@ -206,6 +222,7 @@ export const WorkerToAgentFrameSchema = z.discriminatedUnion("type", [
 	RegisteredFrameSchema,
 	PingFrameSchema,
 	PipelineFrameSchema,
+	TokenRotationFrameSchema,
 	ShutdownFrameSchema,
 	ErrorFrameSchema,
 ]);

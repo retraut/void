@@ -141,6 +141,17 @@ pub enum WorkerToAgent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
+    /// Push a freshly-rotated session_token to an already-connected agent.
+    /// Sent periodically (hourly) by the DO without disconnecting the WS.
+    /// HMAC-signed with AGENT_SHARED_SECRET (same scheme as `pipeline`).
+    /// Agent writes the new token to disk and uses it for future reconnects.
+    #[serde(rename = "token_rotation")]
+    TokenRotation {
+        session_token: String,
+        /// HMAC-SHA256 of the canonical JSON, signed with AGENT_SHARED_SECRET.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sig: Option<String>,
+    },
 }
 
 #[cfg(test)]

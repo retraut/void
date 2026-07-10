@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
-# void test-lab — bring up the dev environment (wrangler dev + control plane).
+# void test-lab — bring up the full local dev environment end-to-end.
 #
-# Does NOT touch the OrbStack VM — that's `agent-vm.sh`'s job and
-# it takes ~2 minutes. The dev env is fast: wrangler dev (already
-# running?) + Bearer check + D1 ping.
+# This is the ONE command that stands up the test-lab:
+#   1. wrangler dev (local Cloudflare Worker = the control plane / panel)
+#   2. the OrbStack VM (created on first run, reused afterwards)
+#   3. a freshly cross-compiled void-agent from the local agent/ tree,
+#      pushed into the VM (no GitHub release download)
+#   4. registration of the agent with the local control plane
+#
+# The heavy VM creation (~2 min) only runs when the VM is missing.
+# Re-running up.sh is idempotent: it reuses the VM + server row,
+# rebuilds the agent from local sources, and verifies it is active.
 #
 # Lifecycle:
-#   scripts/test-lab/provision.sh   # one-time: seed D1 user
-#   scripts/test-lab/agent-vm.sh create   # one-time-ish: spawn VM (~2 min)
-#   scripts/test-lab/up.sh          # bring up the dev env (idempotent)
-#   ... hack on the worker, call void_deploy, etc ...
-#   scripts/test-lab/down.sh        # stop wrangler dev (keep VM)
-#
-# Bring the VM back up after a `down` by re-running `up.sh` —
-# registration is idempotent (the existing setup_token is reused,
-# and the agent reconnects with the same session_token if it has
-# one, or uses the setup_token for a fresh register).
+#   scripts/test-lab/up.sh             # full bring-up (this script)
+#   scripts/test-lab/deploy.sh ...     # trigger a deploy on the VM
+#   scripts/test-lab/down.sh           # stop wrangler dev (keep VM)
+#   scripts/test-lab/agent-vm.sh destroy --purge   # delete the VM
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,70 +30,72 @@ check_prereqs
 #    the user already exists.
 "$SCRIPT_DIR/provision.sh" > /dev/null
 
-# 2. wrangler dev must be running so we can talk to the API.
-section "test-lab: wrangler dev"
+# 2. wrangler dev must be running so we can talk to the API and
+#    the agent can register against it.
+section "test-lab: panel (wrangler dev)"
 wrangler_start
 
-# 3. The agent VM should exist; if not, point the user at
-#    agent-vm.sh create (which is heavy — ~2 min — so we don't
-#    do it automatically).
+# 3. The agent VM. Create it on first run (~2 min); reuse it on
+#    subsequent runs. agent-vm.sh create also registers the server
+#    (writes .test-lab/registration.json with a one-time setup_token),
+#    so a fresh create hands us everything up.sh needs.
 section "test-lab: agent VM"
 if ! "$SCRIPT_DIR/agent-vm.sh" status > /dev/null 2>&1; then
-	die "agent VM '$LAB_VM_NAME' is not running. Create it with:\n  scripts/test-lab/agent-vm.sh create"
+	"$SCRIPT_DIR/agent-vm.sh" create
+else
+	"$SCRIPT_DIR/agent-vm.sh" status
 fi
-"$SCRIPT_DIR/agent-vm.sh" status
 
-# 4. Sanity: the registered server row should still be in D1.
-#    If the VM was created in a previous session, the registration
-#    is in .test-lab/registration.json; we verify it still resolves
-#    in D1 (idempotent if so). If not, re-register.
-section "test-lab: registration"
+# 4. Registration. The agent registers over a Durable Object (VoidCell)
+#    using a single-use setup_token. That DO state is IN-MEMORY in the
+#    wrangler dev process and is reset on every `wrangler dev` restart —
+#    but the D1 `servers` row (status, last_seen) survives, and the
+#    panel does NOT eagerly flip it to `disconnected` on restart, so the
+#    row keeps reporting `active` even though its token is now dead.
+#    Reusing a stale token makes the agent loop forever on
+#    `invalid_token`. So we ALWAYS fetch a fresh registration (new
+#    setup_token) — reusing the same server row when it still exists so
+#    the panel doesn't accumulate dead rows. agent-build.sh then
+#    rewrites the VM's config with the fresh token and restarts the
+#    agent, which registers cleanly against the fresh DO state.
 if [ -f "$LAB_REG" ]; then
 	SERVER_ID=$(jq -r .server_id "$LAB_REG")
-	EXISTS=$(curl -fsS -H "Authorization: Bearer $(bearer_resolve)" "$LAB_API/api/servers" | jq --arg id "$SERVER_ID" '[.servers[] | select(.id == $id)] | length')
+	EXISTS=$(curl -fsS -H "Authorization: Bearer $(bearer_resolve)" "$LAB_API/api/servers" \
+		| jq --arg id "$SERVER_ID" '[.servers[] | select(.id == $id)] | length')
 	if [ "$EXISTS" -gt 0 ]; then
-		ok "registration for $SERVER_ID still in D1 (reusing)"
-	else
-		warn "registration file present but row missing from D1; re-registering"
+		# Same server row, fresh token. The DO state (consumed
+		# setup_token) reset on wrangler restart, so delete the
+		# stale row and register a clean one with a fresh token.
+		log "deleting stale row $SERVER_ID and re-registering with a fresh setup_token (DO state resets on wrangler restart)"
+		api_deregister "$SERVER_ID"
 		rm -f "$LAB_REG"
+		REG_JSON="$(api_register "$LAB_VM_NAME")"
+		printf '%s' "$REG_JSON" | jq . > "$LAB_REG"
+		ok "re-registered $(printf '%s' "$REG_JSON" | jq -r .server_id)"
+	else
+		warn "registration file present but row missing from D1; will register fresh"
+		rm -f "$LAB_REG"
+		log "registering $LAB_VM_NAME with the control plane..."
+		REG_JSON="$(api_register "$LAB_VM_NAME")"
+		printf '%s' "$REG_JSON" | jq . > "$LAB_REG"
+		ok "registered $(printf '%s' "$REG_JSON" | jq -r .server_id)"
 	fi
-fi
-if [ ! -f "$LAB_REG" ]; then
+elif [ ! -f "$LAB_REG" ]; then
+	# No registration at all (e.g. create wrote it but it was wiped):
+	# register now so agent-build.sh has a token to push.
 	log "registering $LAB_VM_NAME with the control plane..."
 	REG_JSON="$(api_register "$LAB_VM_NAME")"
 	printf '%s' "$REG_JSON" | jq . > "$LAB_REG"
 	ok "registered $(printf '%s' "$REG_JSON" | jq -r .server_id)"
-	# The control plane's /api/servers/register derives api_base
-	# from the request URL, which is 127.0.0.1 (the loopback
-	# wrangler dev is bound to). From inside the VM, 127.0.0.1
-	# is the VM itself, not the host. Rewrite the api_base to
-	# the host's OrbStack-bridge IP that the VM can actually reach.
-	rewrite_registration_for_vm || true
-
-	# Push the new config to the VM and restart the agent.
-	# The VM's /etc/void/config.toml is stale (old server_id,
-	# old setup_token, possibly wrong api_base).
-	log "pushing config to $LAB_VM_NAME and restarting void-agent..."
-	SID_NEW=$(jq -r .server_id "$LAB_REG")
-	ST_NEW=$(jq -r .setup_token "$LAB_REG")
-	AB_NEW=$(jq -r .api_base "$LAB_REG")
-	orb run -m "$LAB_VM_NAME" sudo tee /etc/void/config.toml > /dev/null <<VMCFG
-# void-agent config
-# Written by test-lab/up.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-api_base = "${AB_NEW}"
-server_id = "${SID_NEW}"
-setup_token = "${ST_NEW}"
-state_dir = "/var/lib/void"
-public_url_template = "https://pr-{port}.loca.lt"
-VMCFG
-	# Clear any stale session_token so the agent uses the new setup_token
-	orb run -m "$LAB_VM_NAME" sudo rm -f /var/lib/void/session_token || true
-	orb run -m "$LAB_VM_NAME" sudo systemctl restart void-agent 2>&1 | sed 's/^/  /' || true
-	ok "void-agent restarted on $LAB_VM_NAME (clear old config)"
 fi
 
-# 5. Final status.
+# 5. Build the local agent, push it into the VM, push the fresh
+#    config (with the host-reachable api_base), start it, and verify
+#    it reaches state=active. This is the core "new agent + register".
+section "test-lab: agent build + register"
+"$SCRIPT_DIR/agent-build.sh"
+
+# 6. Final status.
 section "test-lab: ready"
 printf '%sDev environment:%s\n' "$C_BOLD" "$C_RESET"
 printf '  • wrangler dev — %s\n' "$LAB_API"
@@ -101,9 +104,9 @@ printf '\n%sAgent VM:%s\n' "$C_BOLD" "$C_RESET"
 "$SCRIPT_DIR/agent-vm.sh" status
 printf '\n%sUseful next steps:%s\n' "$C_BOLD" "$C_RESET"
 printf '  • watch the agent register / log lines:\n'
-printf '      %sorb -m %s journalctl -u void-agent -f%s\n' "$C_DIM" "$LAB_VM_NAME" "$C_RESET"
+printf '      %sorb -m %s tail -f /var/lib/void/agent.run.log%s\n' "$C_DIM" "$LAB_VM_NAME" "$C_RESET"
 printf '  • see the bootstrap log inside the VM:\n'
-	printf '      %sorb -m %s tail -f /var/log/void-bootstrap.log%s\n' "$C_DIM" "$LAB_VM_NAME" "$C_RESET"
+	printf '      %sorb -m %s tail -f /tmp/void-bootstrap.log%s\n' "$C_DIM" "$LAB_VM_NAME" "$C_RESET"
 printf '  • list registered servers on the panel:\n'
 printf '      %sscripts/test-lab/servers.sh%s\n' "$C_DIM" "$C_RESET"
 printf '  • trigger a deploy on the registered VM:\n'

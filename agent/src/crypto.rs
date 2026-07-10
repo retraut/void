@@ -31,6 +31,15 @@ impl<'a> PipelineNoSig<'a> {
     }
 }
 
+/// Canonical JSON for a `token_rotation` frame, used for HMAC verification.
+/// Must match the Worker's `JSON.stringify({ type, session_token })`.
+pub fn token_rotation_canonical(session_token: &str) -> String {
+	format!(
+		"{{\"type\":\"token_rotation\",\"session_token\":{}}}",
+		serde_json::to_string(session_token).unwrap_or_default()
+	)
+}
+
 /// Verify HMAC-SHA256 signature of a deploy message.
 /// Constant-time compare. Signature format: "v1.<hex>"
 pub fn verify_hmac_sha256(secret: &str, payload: &str, signature: &str) -> bool {

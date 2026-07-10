@@ -262,7 +262,6 @@ app.get("/api", (c) => {
 			"WS   /cell/:server_id  (agent)",
 			"GET  /api/servers  (Bearer)",
 			"GET  /api/cell/:server_id/status  (Bearer)",
-			"POST /api/cell/:server_id/rotate-session  (Bearer)",
 			"POST /api/webhooks/github  (HMAC)",
 			"GET  /api/auth/github  (OAuth start)",
 			"GET  /api/auth/callback  (OAuth callback)",
@@ -272,7 +271,6 @@ app.get("/api", (c) => {
 			"GET  /projects  (UI, session cookie)",
 			"GET  /deployments  (UI, session cookie)",
 			"GET  /deployments/:id  (UI, session cookie)",
-			"POST /servers/:id/rotate-session  (UI form action, session cookie)",
 			"GET  /servers/:id/metrics  (UI, session cookie)",
 		],
 	});
@@ -389,11 +387,21 @@ app.get("/api/servers-ui", requireSession, async (c) => {
 	const user = c.get("user");
 	const { results } = await c.env.void_db
 		.prepare(
-			`SELECT s.id, s.name, s.status, s.region, s.size, s.last_seen_at,
-			        s.hetzner_project_name, s.provider_server_id, s.ip_address,
+			`SELECT s.id, s.name, s.status, s.region, s.size, s.last_seen_at, s.created_at,
+			        s.hetzner_project_name, s.provider_server_id, s.ip_address, s.provider,
 			        s.cpu, s.memory, s.disk,
-			        (SELECT COUNT(*) FROM deployments d WHERE d.server_id = s.id) AS deployment_count
+			        (SELECT COUNT(*) FROM deployments d WHERE d.server_id = s.id) AS deployment_count,
+			        p.repo_url AS project_repo_url,
+			        (SELECT ref FROM deployments d
+			           WHERE d.server_id = s.id ORDER BY d.started_at DESC LIMIT 1) AS last_deploy_ref,
+			        (SELECT commit_sha FROM deployments d
+			           WHERE d.server_id = s.id ORDER BY d.started_at DESC LIMIT 1) AS last_deploy_commit,
+			        (SELECT status FROM deployments d
+			           WHERE d.server_id = s.id ORDER BY d.started_at DESC LIMIT 1) AS last_deploy_status,
+			        (SELECT started_at FROM deployments d
+			           WHERE d.server_id = s.id ORDER BY d.started_at DESC LIMIT 1) AS last_deploy_at
 			 FROM servers s
+			 LEFT JOIN projects p ON p.server_id = s.id
 			 WHERE s.user_id = ?
 			 ORDER BY s.created_at DESC`,
 		)
@@ -616,28 +624,6 @@ app.post("/settings/system/:key/delete", requireSession, async (c) => {
 	return c.redirect(
 		`/settings?toast=success&msg=${encodeURIComponent(`${meta.label} cleared (falling back to env)`)}`,
 	);
-});
-
-// UI form action: rotate session token (POST from the rotate button)
-app.post("/servers/:id/rotate-session", requireSession, async (c) => {
-	const serverId = c.req.param("id");
-	const stub = c.env.void_cell.get(c.env.void_cell.idFromName(serverId));
-	const resp = await stub.fetch(`https://cell/${serverId}/rotate-session`, { method: "POST" });
-	const data: any = await resp.json();
-	const newToken = (data && data.session_token) || "(error)";
-	return c.html(`<!doctype html><html><head><meta charset="UTF-8"><title>Session rotated · void</title>
-<style>body{font-family:-apple-system,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;margin:0}
-.box{max-width:600px;background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:32px}
-h1{font-size:1.5rem;margin-bottom:16px}
-code{background:#1a1a1a;padding:6px 10px;border-radius:6px;display:block;color:#0f0;font-family:ui-monospace,monospace;margin:8px 0;word-break:break-all}
-.warn{color:#f90;font-size:0.9rem;margin:16px 0;padding:12px;background:#1a0a00;border-radius:6px}
-a{color:#6cf;display:inline-block;margin-top:16px}</style></head>
-<body><div class="box">
-<h1>Session token rotated for ${escapeHtml(serverId)}</h1>
-<p>New token:</p><code>${escapeHtml(newToken)}</code>
-<div class="warn">The agent has been disconnected. Update <code>&lt;state_dir&gt;/session_token</code> on the agent host with the new token, then restart the agent.</div>
-<a href="/servers">Back to servers</a>
-</div></body></html>`);
 });
 
 // GET /servers/:id/metrics — live agent CPU/memory metrics (session cookie auth)

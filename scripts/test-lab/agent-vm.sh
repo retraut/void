@@ -92,14 +92,18 @@ cmd_create() {
 	# --user-data flag because on Apple Silicon the orb CLI has
 	# a hardcoded 30s "didn't start" check that always fires
 	# when --user-data is set, regardless of distro.
-	AGENT_TAG="${VOID_AGENT_RELEASE_TAG:-v0.4.0}"
-	AGENT_REPO="${VOID_AGENT_REPO:-retraut/void}"
-	AGENT_URL="https://github.com/${AGENT_REPO}/releases/download/${AGENT_TAG}/void-agent-${AGENT_TAG}.tar.gz"
+	#
+	# NOTE: the void-agent binary is NOT downloaded here anymore.
+	# It is cross-compiled from the local agent/ tree on the host
+	# and pushed into the VM by scripts/test-lab/agent-build.sh
+	# (run by up.sh after registration). Stripping the binary from
+	# the bootstrap means uncommitted local agent changes are
+	# actually tested, not a stale GitHub release tarball.
 
 	{
 		printf '#!/bin/bash\n'
 		printf 'set -e\n'
-		printf 'exec > >(tee -a /var/log/void-bootstrap.log) 2>&1\n'
+		printf 'exec > /tmp/void-bootstrap.log 2>&1\n'
 		printf 'echo "=== void-agent bootstrap starting at $(date) ==="\n'
 		printf 'ARCH=$(uname -m)\n'
 		printf 'if [ "$ARCH" = "x86_64" ]; then CFD_ARCH="amd64"\n'
@@ -108,19 +112,14 @@ cmd_create() {
 		# Build deps (git for clone, build-essential for cargo).
 		# apt-get update is needed on a fresh ubuntu:26.04.
 		printf 'export DEBIAN_FRONTEND=noninteractive\n'
-		printf 'apt-get update >/dev/null 2>&1\n'
-		printf 'apt-get install -y --no-install-recommends curl ca-certificates git build-essential >/dev/null 2>&1\n'
+		printf 'apt-get update\n'
+		printf 'apt-get install -y --no-install-recommends curl ca-certificates git build-essential\n'
 		printf 'echo "apt: git=$(git --version) make=$(make --version | head -1)"\n'
 		printf 'curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CFD_ARCH}" -o /usr/local/bin/cloudflared\n'
 		printf 'chmod +x /usr/local/bin/cloudflared\n'
 		printf 'echo "cloudflared: $(/usr/local/bin/cloudflared --version 2>&1 | head -1)"\n'
-		printf 'cd /tmp\n'
-		printf 'curl -fsSL "%s" -o void-agent.tar.gz\n' "$AGENT_URL"
-		printf 'tar -xzf void-agent.tar.gz\n'
-		printf 'mv void-agent /usr/local/bin/void-agent\n'
-		printf 'chmod +x /usr/local/bin/void-agent\n'
-		printf 'echo "void-agent: $(/usr/local/bin/void-agent --version 2>&1 | head -1)"\n'
 		printf 'mkdir -p /var/lib/void /etc/void\n'
+		printf 'echo "void-agent binary is pushed by scripts/test-lab/agent-build.sh (run after this VM is created)"\n'
 		printf 'cat > /etc/void/config.toml <<CFG\n'
 		printf '# Config rendered by the control plane (/api/servers/register)\n'
 		jq -r .config_toml "$LAB_REG"
@@ -132,8 +131,8 @@ cmd_create() {
 		printf '[Install]\nWantedBy=multi-user.target\n'
 		printf 'SVC\n'
 		printf 'systemctl daemon-reload\n'
-		printf 'systemctl enable --now void-agent.service\n'
-		printf 'echo "void-agent service started"\n'
+		printf 'systemctl enable void-agent.service\n'
+		printf 'echo "void-agent service enabled (binary pushed by agent-build.sh, then started)"\n'
 		printf 'echo "=== void-agent bootstrap complete at $(date) ==="\n'
 	} > "$LAB_CLOUD_INIT"
 	ok "wrote $LAB_CLOUD_INIT"
@@ -179,26 +178,21 @@ cmd_create() {
 		die "VM $LAB_VM_NAME is stuck in state '$STATE'"
 	fi
 
-	# Copy the bootstrap script into the VM and run it. We use
-	# `orb push` (no SSH config needed) to stage, then `orb run`
-	# to execute.
+	# Stage the bootstrap script inside the VM. `orb push` is
+	# unreliable in some setups (read-only container mounts), so we
+	# pipe the script over stdin into the VM via `orb run` instead.
 	log "pushing bootstrap script..."
-	orb push "$LAB_CLOUD_INIT" "$LAB_VM_NAME:/tmp/void-bootstrap.sh" || die "orb push failed"
-	log "running bootstrap (this takes ~30s: downloads + installs + registers)..."
-	if ! orb run -- bash -x /tmp/void-bootstrap.sh 2>&1 | sed 's/^/  /'; then
-		die "bootstrap failed inside the VM. Tail /var/log/void-bootstrap.log:\n  orb run -- sudo tail -f /var/log/void-bootstrap.log"
+	orb run -m "$LAB_VM_NAME" bash -c 'cat > /tmp/void-bootstrap.sh' < "$LAB_CLOUD_INIT" \
+		|| die "failed to stage bootstrap in VM"
+	log "running bootstrap (installs git/cloudflared, writes config + systemd unit)..."
+	if ! orb run -m "$LAB_VM_NAME" sudo bash -x /tmp/void-bootstrap.sh 2>&1 | sed 's/^/  /'; then
+		die "bootstrap failed inside the VM. Tail /tmp/void-bootstrap.log:\n  orb run -m $LAB_VM_NAME sudo tail -f /tmp/void-bootstrap.log"
 	fi
 
-	# The agent should have already registered with the control
-	# plane via WS. Verify.
-	sleep 3
-	SERVER_ID=$(jq -r .server_id "$LAB_REG")
-	STATE=$(curl -fsS -H "Authorization: Bearer $(bearer_resolve)" "$LAB_API/api/servers" | jq -r --arg id "$SERVER_ID" '.servers[] | select(.id == $id) | .status')
-	if [ "$STATE" = "active" ]; then
-		ok "$SERVER_ID reached state=active"
-	else
-		warn "$SERVER_ID is in state '$STATE' (expected 'active'). Check: orb -m $LAB_VM_NAME journalctl -u void-agent -f"
-	fi
+	# The agent binary is NOT present yet — it is cross-compiled on
+	# the host and pushed by scripts/test-lab/agent-build.sh (run
+	# by up.sh). Skip the active-state check here; it lives in
+	# agent-build.sh after the binary is in place.
 	cmd_status
 }
 

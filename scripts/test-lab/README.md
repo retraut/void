@@ -29,7 +29,7 @@ VM every time.
 macOS host
   ├── wrangler dev (localhost:8787)         D1 + DO + agent WS
   ├── OrbStack VM (ubuntu:26.04, amd64)     void-agent + docker + systemd
-  └── Test Runner                            scripts/test-lab/{deploy,logs,servers}.sh
+  └── Host build                            cargo zigbuild → push binary to VM
 ```
 
 The same `POST /api/servers/register` endpoint used in production
@@ -50,6 +50,8 @@ brew install orbstack jq
 # docker (for any container-based test scenarios)
 # rust (cargo) — installed by rustup if not present
 # node + pnpm — for wrangler and the worker
+# zig + cargo-zigbuild — cross-compile the agent for the amd64 VM
+#   brew install zig && cargo install cargo-zigbuild
 ```
 
 The Bearer token used by the test-lab scripts is read from
@@ -100,6 +102,9 @@ scripts/test-lab/servers.sh
 scripts/test-lab/deploy.sh srv_abc123 https://github.com/retraut/void-examples-hello
 scripts/test-lab/logs.sh srv_abc123 <deployment_id>
 
+# After changing code in agent/, rebuild & push the new binary:
+scripts/test-lab/agent-build.sh
+
 # Stop the dev env (keeps the VM):
 scripts/test-lab/down.sh
 
@@ -117,12 +122,14 @@ scripts/test-lab/agent-vm.sh destroy --purge
 |---|---|
 | `provision.sh` | Seed D1 with `usr_lab` user (idempotent) |
 | `agent-vm.sh status` | Show VM name, state, IP |
-| `agent-vm.sh create` | Create VM + apply cloud-init (≈2 min) |
+| `agent-vm.sh create` | Create VM + apply cloud-init (≈2 min). Installs git/cloudflared, writes config + systemd unit. The agent binary is built on the host and pushed by `agent-build.sh` (run by `up.sh`) — not downloaded from a GitHub release |
 | `agent-vm.sh destroy` | Stop VM, keep on disk |
 | `agent-vm.sh destroy --purge` | Delete VM (image gone) |
 | `agent-vm.sh ssh` | SSH into the VM |
 | `agent-vm.sh ip` | Print the VM's IP |
-| `up.sh` | Start wrangler dev + verify VM + register (idempotent) |
+| `agent-build.sh` | Cross-compile the local `agent/` for the VM, push the binary in, restart + verify `active` |
+| `agent-build.sh --check` | Skip rebuild; just verify the agent is `active` |
+| `up.sh` | Start wrangler dev + verify VM + register + build & push agent (idempotent) |
 | `down.sh` | Stop wrangler dev (VM kept) |
 | `down.sh --full` | Stop wrangler dev + remove scratch dir |
 | `servers.sh` | List registered servers |
