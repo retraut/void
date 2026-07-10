@@ -104,7 +104,7 @@ function CloudProviders({ data }: { data: SettingsData }) {
           <input
             className="input flex-1"
             type="password"
-            placeholder="hcloud_xxxxxxxxxxxxxxxx"
+            placeholder="Hetzner API token"
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />

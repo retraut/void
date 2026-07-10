@@ -1608,7 +1608,7 @@ ${fullUser
 		!hetznerCred
 			? `<form method="POST" action="/settings/hetzner" id="hetzner-form" style="margin-top:16px;display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
 					<div style="flex:1;min-width:240px;position:relative">
-						<input type="password" name="token" id="hetzner-token" placeholder="hcloud_xxxxxxxxxxxxxxxx" autocomplete="off" spellcheck="false" style="width:100%;padding:10px 32px 10px 12px;background:#000;border:1px solid #333;border-radius:8px;color:#fff;font-family:ui-monospace,monospace;font-size:0.9rem;box-sizing:border-box">
+						<input type="password" name="token" id="hetzner-token" placeholder="Hetzner API token" autocomplete="off" spellcheck="false" style="width:100%;padding:10px 32px 10px 12px;background:#000;border:1px solid #333;border-radius:8px;color:#fff;font-family:ui-monospace,monospace;font-size:0.9rem;box-sizing:border-box">
 						<span id="hetzner-check" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:0.95rem;pointer-events:none;display:none"></span>
 					</div>
 					<button type="button" id="hetzner-test" class="btn btn-secondary" style="padding:10px 16px" disabled>Test</button>

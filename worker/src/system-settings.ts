@@ -38,7 +38,7 @@ export const SYSTEM_KEYS = [
 		label: "Hetzner Cloud API token",
 		description: "Used to provision Hetzner Cloud VMs. Per-user tokens in /settings → Cloud providers override this default.",
 		envVar: "HETZNER_TOKEN",
-		placeholder: "hcloud_xxxxxxxxxxxxxxxx",
+		placeholder: "Hetzner API token",
 	},
 	{
 		key: "cf_api_token",
