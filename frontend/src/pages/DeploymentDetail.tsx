@@ -30,14 +30,15 @@ export default function DeploymentDetail() {
         ← back
       </button>
       <div className="mb-6 flex items-center gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">{data.project_name ?? "Deployment"}</h1>
+		<h1 className="text-2xl font-semibold tracking-tight">{data.repository_name ?? "Deployment"}</h1>
         <StatusPill status={data.status} />
       </div>
 
       <div className="card mb-6 grid grid-cols-2 gap-4 p-5 md:grid-cols-4">
         <Field label="Ref" value={data.ref ?? "—"} />
         <Field label="Commit" value={shortSha(data.commit_sha)} mono />
-        <Field label="Server" value={data.server_name ?? "—"} />
+		<Field label="Server" value={data.server_name ?? "—"} />
+		<Field label="Project" value={data.project_name ?? "—"} />
         <Field label="Started" value={timeAgo(data.started_at)} />
         <Field label="Status" value={data.status} />
         <Field label="Port" value={data.port ? String(data.port) : "—"} />

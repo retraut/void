@@ -64,6 +64,7 @@ export class VoidCell {
 				repo_url: string;
 				ref: string;
 				env?: Record<string, string>;
+				clone_env?: Record<string, string>;
 				build_command?: string;
 				serve_command?: string;
 				port: number;
@@ -102,6 +103,7 @@ export class VoidCell {
 			}> = [];
 			steps.push({
 				cmd: `git clone --depth 1 --branch ${body.ref} ${urlCheck.normalized} .`,
+				env: body.clone_env,
 				timeout_s: 300,
 			});
 			if (body.build_command) {
@@ -149,7 +151,12 @@ export class VoidCell {
 				);
 			}
 			this.ws.send(JSON.stringify(pipelineMsg));
-			return Response.json({ ok: true, sent: pipelineMsg, signed: !!(pipelineMsg as { sig?: string }).sig });
+			return Response.json({
+				ok: true,
+				deployment_id: body.deployment_id,
+				step_count: steps.length,
+				signed: !!(pipelineMsg as { sig?: string }).sig,
+			});
 		}
 
 		// Internal: subscribe to log stream (SSE)
@@ -350,6 +357,24 @@ export class VoidCell {
 			return;
 		}
 
+		if (msg.type === "inventory") {
+			const inventory = msg.inventory;
+			const network = inventory.network as { primary_ipv4?: unknown } | undefined;
+			const primaryIp = typeof network?.primary_ipv4 === "string" ? network.primary_ipv4 : null;
+			const system = inventory as { cpu_count?: unknown; total_memory_mb?: unknown };
+			const cpuCount = typeof system.cpu_count === "number" ? Math.round(system.cpu_count) : null;
+			const totalMemoryMb = typeof system.total_memory_mb === "number" ? Math.round(system.total_memory_mb) : null;
+			await this.env.void_db
+				.prepare(
+					`UPDATE servers SET inventory_json = ?, inventory_collected_at = ?,
+						ip_address = COALESCE(?, ip_address),
+						cpu = COALESCE(?, cpu), memory = COALESCE(?, memory) WHERE id = ?`,
+				)
+				.bind(JSON.stringify(inventory), Math.floor(Date.now() / 1000), primaryIp, cpuCount, totalMemoryMb, this.serverId)
+				.run();
+			return;
+		}
+
 		if (msg.type === "log") {
 			const entry = {
 				deployment_id: msg.deployment_id,
@@ -373,6 +398,16 @@ export class VoidCell {
 		}
 
 		if (msg.type === "deploy_done") {
+			const status = msg.status === "success" ? "running" : "failed";
+			await this.env.void_db
+				.prepare(
+					`UPDATE deployments
+					 SET status = ?, error = ?, finished_at = unixepoch(),
+					     duration_ms = (unixepoch() - started_at) * 1000
+					 WHERE id = ?`,
+				)
+				.bind(status, msg.error || null, msg.deployment_id)
+				.run();
 			const entry = {
 				deployment_id: msg.deployment_id,
 				stream: "status",

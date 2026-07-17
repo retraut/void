@@ -1,9 +1,13 @@
 import type {
-  DashboardData,
-  Deployment,
-  LogEntry,
-  Metrics,
+	DashboardData,
+	Deployment,
+	LogEntry,
+	Metrics,
   Project,
+  ProjectDetail,
+  CloudflareDomain,
+  GithubRepositoryOption,
+  ServerCatalog,
   ServerRow,
   ServerSummary,
   SessionUser,
@@ -17,7 +21,7 @@ import type {
  * /api/auth/dev-login or the GitHub OAuth callback). We never attach a
  * Bearer token in the SPA — all SPA routes are session-cookie protected.
  *
- * 401 means "not logged in" — the caller (useAuth) redirects to login.
+ * 401 means "not logged in" — the route guard redirects to the landing page.
  */
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -50,11 +54,12 @@ export interface ApiError extends Error {
 export const api = {
   me: () => apiFetch<{ user: SessionUser }>("/api/me"),
 
-  servers: () => apiFetch<{ servers: ServerSummary[] }>("/api/servers-ui"),
+  servers: (project?: string | null) =>
+    apiFetch<{ servers: ServerSummary[] }>(`/api/servers-ui${project ? `?project=${encodeURIComponent(project)}` : ""}`),
 
   server: (id: string) => apiFetch<{ server: ServerRow }>(`/api/servers/${id}`),
 
-  serverMetrics: async (id: string): Promise<Metrics | null> => {
+	serverMetrics: async (id: string): Promise<Metrics | null> => {
     const d = await apiFetch<{ metrics: Metrics | null; last_heartbeat: number }>(
       `/servers/${id}/metrics`,
     );
@@ -65,6 +70,73 @@ export const api = {
     apiFetch<{ ok: true; message: string }>(`/api/servers/${id}`, { method: "DELETE" }),
 
   projects: () => apiFetch<{ projects: Project[] }>("/api/projects"),
+
+  createProject: (name: string) =>
+    apiFetch<{ project: Project }>("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+
+  project: (id: string) => apiFetch<ProjectDetail>(`/api/projects/${id}`),
+
+  connectProjectGithub: (id: string, token: string) =>
+    apiFetch<{ ok: true }>(`/api/projects/${id}/github`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  connectProjectHetzner: (id: string, token: string) =>
+    apiFetch<{ ok: true; datacenters: number }>(`/api/projects/${id}/hetzner`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  connectProjectCloudflare: (id: string, token: string) =>
+    apiFetch<{ ok: true; zones: number }>(`/api/projects/${id}/cloudflare`, {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  projectDomains: (id: string) =>
+    apiFetch<{ domains: CloudflareDomain[] }>(`/api/projects/${id}/domains`),
+
+  availableGithubRepositories: (id: string) =>
+    apiFetch<{ repositories: GithubRepositoryOption[] }>(`/api/projects/${id}/github/repositories`),
+
+  addProjectRepository: (
+    id: string,
+    input: {
+      github_repo_id: number;
+      build_command?: string;
+      serve_command?: string;
+      default_port: number;
+    },
+  ) =>
+    apiFetch<{ ok: true; repository_id: string }>(`/api/projects/${id}/repositories`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  projectServerCatalog: (id: string) =>
+    apiFetch<ServerCatalog>(`/api/projects/${id}/server-catalog`),
+
+  addProjectServer: (
+    id: string,
+    input: { name: string; region: string; size: string; image: string },
+  ) =>
+    apiFetch<{ ok: true }>(`/api/projects/${id}/servers`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  deployProjectRepository: (
+    id: string,
+    input: { repository_id: string; server_id: string; ref?: string },
+  ) =>
+    apiFetch<{ ok: true; deployment_id: string }>(`/api/projects/${id}/deploy`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 
   deployments: (params: { project?: string | null; page?: number; perPage?: number } = {}) => {
     const q = new URLSearchParams();
@@ -82,7 +154,8 @@ export const api = {
 
   deployment: (id: string) => apiFetch<{ deployment: Deployment }>(`/api/deployments/${id}`),
 
-  dashboard: () => apiFetch<DashboardData>("/api/dashboard"),
+  dashboard: (project?: string | null) =>
+    apiFetch<DashboardData>(`/api/dashboard${project ? `?project=${encodeURIComponent(project)}` : ""}`),
 
   devLogin: async (username = "lab") => {
     const res = await fetch("/api/auth/dev-login", {

@@ -18,6 +18,7 @@ export interface CreateServerInput {
 	size: string; // e.g. "cx22"
 	region: string; // e.g. "fsn1"
 	image: string; // e.g. "ubuntu-26.04"
+	project_id?: string;
 }
 
 export interface CreateServerResult {
@@ -53,10 +54,16 @@ export async function createServerForUser(
 ): Promise<CreateServerResult> {
 	const serverId = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 	const now = Math.floor(Date.now() / 1000);
+	let projectId = input.project_id || null;
+	if (!projectId && userId) {
+		const { ensureDefaultProject } = await import("./projects");
+		projectId = (await ensureDefaultProject(env, userId)).id;
+	}
+	if (!projectId) throw new Error("project is required");
 
 	// Resolve the token: per-user → system (panel) → env
 	let hetznerToken: string | null = null;
-	if (userId) hetznerToken = await getProviderToken(env, userId, "hetzner");
+	if (userId) hetznerToken = await getProviderToken(env, userId, "hetzner", projectId);
 	if (!hetznerToken) {
 		const { getSystemToken } = await import("./system-settings");
 		hetznerToken = await getSystemToken(env, "hetzner_token");
@@ -66,10 +73,10 @@ export async function createServerForUser(
 	if (!hetznerToken) {
 		await env.void_db
 			.prepare(
-				`INSERT INTO servers (id, user_id, name, provider, region, size, status, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, 'provisioning', ?)`,
+				`INSERT INTO servers (id, user_id, project_id, name, provider, region, size, status, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, 'provisioning', ?)`,
 			)
-			.bind(serverId, userId, input.name, "hetzner", input.region, input.size, now)
+			.bind(serverId, userId, projectId, input.name, "hetzner", input.region, input.size, now)
 			.run();
 		return {
 			id: serverId,
@@ -79,8 +86,8 @@ export async function createServerForUser(
 			image: input.image,
 			status: "provisioning",
 			note: env.HETZNER_TOKEN
-				? "Stub mode — no Hetzner token found for this user. Add one in /settings → Cloud providers, or set a system default in /settings → System settings."
-				: "No Hetzner token configured. Set one in /settings → Cloud providers (per-user) or /settings → System settings (system default).",
+				? "Stub mode — no Hetzner token found for this Project. Add one in Project → Providers, or set a system default in Account settings."
+				: "No Hetzner token configured. Set one in Project → Providers or configure a system default in Account settings.",
 		};
 	}
 
@@ -89,10 +96,10 @@ export async function createServerForUser(
 	const setupToken = `set_${crypto.randomUUID().replace(/-/g, "")}`;
 	await env.void_db
 		.prepare(
-			`INSERT INTO servers (id, user_id, name, provider, region, size, status, setup_token, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, 'provisioning', ?, ?)`,
+			`INSERT INTO servers (id, user_id, project_id, name, provider, region, size, status, setup_token, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 'provisioning', ?, ?)`,
 		)
-		.bind(serverId, userId, input.name, "hetzner", input.region, input.size, setupToken, now)
+		.bind(serverId, userId, projectId, input.name, "hetzner", input.region, input.size, setupToken, now)
 		.run();
 
 	const apiBase = new URL(requestUrl).origin.replace(/^http/, "wss");

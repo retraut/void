@@ -46,9 +46,9 @@ cmd_build_and_push() {
 		# base64 and decode inside the VM.
 		log "pushing $BIN → $LAB_VM_NAME:/usr/local/bin/void-agent"
 		base64 -i "$BIN" \
-			| orb run -m "$LAB_VM_NAME" sudo bash -c 'base64 -d > /usr/local/bin/void-agent' \
+			| orb run -m "$LAB_VM_NAME" -u root bash -c 'base64 -d > /usr/local/bin/void-agent' \
 			|| die "push failed"
-		orb run -m "$LAB_VM_NAME" sudo chmod +x /usr/local/bin/void-agent \
+		orb run -m "$LAB_VM_NAME" -u root chmod +x /usr/local/bin/void-agent \
 			|| die "chmod failed"
 
 		# 2b. Rewrite api_base to the host IP the VM can reach, then
@@ -60,7 +60,7 @@ cmd_build_and_push() {
 		ST_NEW=$(jq -r .setup_token "$LAB_REG")
 		AB_NEW=$(jq -r .api_base "$LAB_REG")
 		log "pushing config to $LAB_VM_NAME (api_base=$AB_NEW)..."
-		orb run -m "$LAB_VM_NAME" sudo bash -c 'cat > /etc/void/config.toml' <<VMCFG
+		orb run -m "$LAB_VM_NAME" -u root bash -c 'cat > /etc/void/config.toml' <<VMCFG
 # void-agent config
 # Written by test-lab/agent-build.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -85,10 +85,10 @@ VMCFG
 		# and apply the SAME priority (highest nice, lowest OOM score =
 		# dies last) ourselves. The unit file is still written by the
 		# bootstrap for parity/documentation.
-		orb run -m "$LAB_VM_NAME" sudo systemctl disable --now void-agent 2>/dev/null || true
-		orb run -m "$LAB_VM_NAME" sudo rm -f /var/lib/void/session_token || true
+		orb run -m "$LAB_VM_NAME" -u root systemctl disable --now void-agent 2>/dev/null || true
+		orb run -m "$LAB_VM_NAME" -u root rm -f /var/lib/void/session_token || true
 		log "starting void-agent on $LAB_VM_NAME (Nice=-20, OOM=-1000)"
-		orb run -m "$LAB_VM_NAME" sudo bash -c '
+		orb run -m "$LAB_VM_NAME" -u root bash -c '
 			pkill -9 void-agent 2>/dev/null || true
 			sleep 1
 			nohup bash -c "echo -1000 > /proc/self/oom_score_adj; exec nice -n -20 /usr/local/bin/void-agent" \

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { api } from "../api";
 import { usePolling } from "../hooks";
@@ -8,9 +8,11 @@ import { shortSha, timeAgo } from "../utils";
 import type { Deployment, DeploymentStatus } from "../types";
 
 export default function Deployments() {
+	const [searchParams] = useSearchParams();
+	const projectId = searchParams.get("project");
   const [page, setPage] = useState(1);
   const { data, loading } = usePolling(
-    () => api.deployments({ page, perPage: 20 }),
+	() => api.deployments({ project: projectId, page, perPage: 20 }),
     6000,
   );
 
@@ -43,9 +45,9 @@ export default function Deployments() {
                   className="card flex items-center justify-between p-4 transition-colors hover:border-void-accent/40"
                 >
                   <div className="min-w-0">
-                    <div className="truncate text-sm text-white">{d.project_name ?? "—"}</div>
-                    <div className="text-xs text-void-dim">
-                      {d.ref} · <span className="font-mono">{shortSha(d.commit_sha)}</span> ·{" "}
+					<div className="truncate text-sm text-white">{d.repository_name ?? "—"}</div>
+					<div className="text-xs text-void-dim">
+					  {d.project_name ?? "—"} · {d.ref} · <span className="font-mono">{shortSha(d.commit_sha)}</span> ·{" "}
                       {d.server_name ?? "—"}
                     </div>
                   </div>

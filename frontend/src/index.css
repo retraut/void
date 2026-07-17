@@ -27,6 +27,49 @@ body {
   box-sizing: border-box;
 }
 
+.void-sidebar-mark {
+  position: relative;
+  display: flex;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  isolation: isolate;
+}
+.void-sidebar-mark::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: conic-gradient(from 0deg, #7c5cff, #22d3ee, transparent 42%, #7c5cff);
+  animation: void-sidebar-orbit 3.2s linear infinite;
+  box-shadow: 0 0 22px -5px rgba(124, 92, 255, 0.75);
+}
+.void-sidebar-mark::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  z-index: -1;
+  border-radius: inherit;
+  background: #0e0e12;
+}
+.void-sidebar-mark span {
+  font-size: 22px;
+  font-weight: 300;
+  line-height: 1;
+  color: #c7bcff;
+  animation: void-sidebar-pulse 2.8s ease-in-out infinite;
+}
+@keyframes void-sidebar-orbit {
+  to { transform: rotate(360deg); }
+}
+@keyframes void-sidebar-pulse {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(124, 92, 255, 0.35)); }
+  50% { color: #8cecf7; filter: drop-shadow(0 0 9px rgba(34, 211, 238, 0.75)); }
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -44,7 +87,7 @@ body {
     @apply rounded-2xl border border-void-border bg-void-panel/80 backdrop-blur-sm;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50;
   }
   .btn-primary {
     @apply btn bg-void-accent text-white hover:bg-void-accent/90;

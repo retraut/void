@@ -31,7 +31,7 @@ app.post("/api/auth/dev-login", handleDevLogin);
 // dev-login route itself (above) is the actual security boundary
 // (it returns 404 if VOID_DEV_AUTH is not "1"/"true").
 const originalFetch = app.fetch.bind(app);
-app.fetch = async (request: Request, env: Env, ctx: ExecutionContext): Promise<Response> => {
+(app as any).fetch = async (request: Request, env: Env, ctx: ExecutionContext): Promise<Response> => {
 	const response = await originalFetch(request, env, ctx);
 	const url = new URL(request.url);
 	if (
@@ -39,7 +39,7 @@ app.fetch = async (request: Request, env: Env, ctx: ExecutionContext): Promise<R
 		url.pathname === "/" &&
 		response.headers.get("content-type")?.includes("text/html")
 	) {
-		const text = await response.text();
+		const text = await response.clone().text();
 		if (text.includes(DEV_AUTH_BUTTON_MARKER)) {
 			const replaced = text.replace(DEV_AUTH_BUTTON_MARKER, devAuthButtonHtml);
 			return new Response(replaced, response);

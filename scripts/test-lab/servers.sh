@@ -24,10 +24,9 @@ api_servers | jq -r '
 		.status,
 		(.region // "-"),
 		(.size // "-"),
-		(.last_seen_at // "never")
+		(.last_seen_at // .last_seen // "never")
 	] | @tsv
 ' | column -t -s $'\t' | (
-	read -r header
 	printf '%-22s %-20s %-10s %-12s %-8s %-8s %s\n' \
 		"ID" "NAME" "PROVIDER" "STATUS" "REGION" "SIZE" "LAST SEEN"
 	printf '%-22s %-20s %-10s %-12s %-8s %-8s %s\n' \

@@ -7,7 +7,8 @@
     "dev": "wrangler dev --config wrangler.dev.jsonc",
     "dev:prod": "wrangler dev --config wrangler.jsonc",
     "start": "wrangler dev --config wrangler.dev.jsonc",
-    "test": "vitest",
+		"test": "vitest",
+		"typecheck": "tsc --noEmit",
     "test:cloud-init": "bash scripts/test-cloud-init.sh",
     "cf-typegen": "wrangler types"
   },

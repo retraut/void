@@ -1,0 +1,11 @@
+{
+  "contract": "src/protocol-sync.prose.md",
+  "name": "protocol-sync",
+  "version": "0.1.0",
+  "timestamp": $(date +%s),
+  "inputs": {
+    "AgentProtocolSchema": "agent/src/protocol.rs",
+    "WorkerProtocolSchema": "worker/src/protocol.ts",
+    "ProtocolDoc": "docs/PROTOCOL.md"
+  }
+}

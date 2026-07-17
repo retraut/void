@@ -1,5 +1,9 @@
 # Why Hono?
 
+> **Status: Accepted architecture decision (historical rationale).** This record
+> explains the routing-framework choice; it is not a current component map. See
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the runtime architecture.
+
 Current state: `worker/src/index.ts` is **262 lines** of hand-rolled routing with `if (path === ...)`, regex `path.match(...)`, manual CORS headers, and auth middleware duplicated at every entry point. It works. It's also brittle, repetitive, and hard to extend.
 
 ---

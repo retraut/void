@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import type { SessionUser } from "./types";
 
 /**
- * Owns the current session user. Redirects to /login when the API
+ * Owns the current session user. The route guard redirects unauthenticated
+ * visitors to the landing page when the API
  * returns 401, and exposes a logout that clears the session.
  */
 export function useAuth() {
@@ -51,10 +52,14 @@ export function usePolling<T>(
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+	const fetcherRef = useRef(fetcher);
+	useEffect(() => {
+		fetcherRef.current = fetcher;
+	}, [fetcher]);
 
   const tick = useCallback(async () => {
     try {
-      const d = await fetcher();
+	  const d = await fetcherRef.current();
       setData(d);
       setError(null);
     } catch (e: any) {
@@ -62,8 +67,7 @@ export function usePolling<T>(
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetcher]);
+	}, []);
 
   useEffect(() => {
     if (!enabled) return;

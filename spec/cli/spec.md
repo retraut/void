@@ -1,5 +1,9 @@
 # CLI Specification
 
+**Status:** Planned — no CLI package is currently present.
+
+**Architecture:** [`../../docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md)
+
 ## Purpose
 
 Define behavior of the `void` command-line interface — used for project setup, deployment management, and AI assistant integration.

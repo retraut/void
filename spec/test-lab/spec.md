@@ -1,5 +1,9 @@
 # Test Lab Specification
 
+**Status:** Current developer-environment contract.
+
+**Runbook:** [`../../scripts/test-lab/README.md`](../../scripts/test-lab/README.md)
+
 ## Purpose
 
 Define the local test lab environment for developing and testing the void agent against the control plane without external infrastructure (Hetzner, Cloudflare tunnels, production D1).

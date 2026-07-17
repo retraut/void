@@ -1,19 +1,18 @@
+import { useEffect } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Layout } from "./components/Layout";
 import { useAuth } from "./hooks";
-import Dashboard from "./pages/Dashboard";
 import Servers from "./pages/Servers";
 import ServerDetail from "./pages/ServerDetail";
 import Projects from "./pages/Projects";
+import ProjectDetail from "./pages/ProjectDetail";
 import Deployments from "./pages/Deployments";
 import DeploymentDetail from "./pages/DeploymentDetail";
 import Settings from "./pages/Settings";
-import Login from "./pages/Login";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  const location = useLocation();
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -22,9 +21,32 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     );
   }
   if (!user) {
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    return <UnauthorizedRedirect />;
   }
   return <>{children}</>;
+}
+
+function UnauthorizedRedirect() {
+  useEffect(() => {
+    window.location.replace("/?auth=unauthorized");
+  }, []);
+
+  return (
+    <div className="flex h-screen items-center justify-center">
+      <Spinner />
+    </div>
+  );
+}
+
+function ReturnToLanding() {
+  useEffect(() => {
+    window.location.replace("/");
+  }, []);
+  return (
+    <div className="flex h-screen items-center justify-center">
+      <Spinner />
+    </div>
+  );
 }
 
 function AnimatedRoutes() {
@@ -40,14 +62,9 @@ function AnimatedRoutes() {
         className="h-full"
       >
         <Routes location={location}>
-          <Route path="/login" element={<Login />} />
           <Route
             path="/dashboard"
-            element={
-              <RequireAuth>
-                <Dashboard />
-              </RequireAuth>
-            }
+            element={<Navigate to="/projects" replace />}
           />
           <Route
             path="/servers"
@@ -70,6 +87,22 @@ function AnimatedRoutes() {
             element={
               <RequireAuth>
                 <Projects />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/projects/:id"
+            element={
+              <RequireAuth>
+                <ProjectDetail />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/projects/:id/:section"
+            element={
+              <RequireAuth>
+                <ProjectDetail />
               </RequireAuth>
             }
           />
@@ -97,8 +130,8 @@ function AnimatedRoutes() {
               </RequireAuth>
             }
           />
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/" element={<ReturnToLanding />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </motion.div>
     </AnimatePresence>

@@ -1,5 +1,11 @@
 # Deployment Specification
 
+**Status:** Target — the current runtime dispatches ordered shell pipelines and
+records status, but does not yet provide the general blue-green, health-check,
+rollback, durable queue, or seven-day log-retention behavior specified below.
+
+**Current flow:** [`../../docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md#2-deployment-dispatch)
+
 ## Purpose
 
 Define the deployment lifecycle — how code moves from git push to live URL, including build, deploy, health checks, rollback, and cleanup.

@@ -1,10 +1,37 @@
 # Control Plane Specification
 
+**Status:** Mixed — generic registration, MCP dispatch, webhook dispatch, and
+session-backed read APIs exist; preview comments, disconnect requeue, and some
+project-management behavior below remain target behavior.
+
+**Architecture:** [`../../docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md)
+
 ## Purpose
 
 Define the control plane behavior — a Cloudflare Workers-based API that manages projects, deployments, agents, and provides MCP server capabilities for AI assistants to deploy applications without manual DevOps.
 
 ## Requirements
+
+### Requirement: Project Aggregate
+The control plane SHALL use Project as the ownership boundary for connected
+accounts, repositories, servers, and deployments.
+
+#### Scenario: Bootstrap default project
+- **GIVEN** an authenticated user with no Project
+- **WHEN** the panel loads
+- **THEN** the system creates one `Default Project`
+
+#### Scenario: Deploy within project boundary
+- **GIVEN** a repository and an active server in the same Project
+- **WHEN** the user deploys the repository to that server
+- **THEN** the deployment records both Project and repository ownership
+- **AND** a server from another Project is rejected
+
+#### Scenario: Connect project accounts and providers
+- **GIVEN** a Project
+- **WHEN** the user connects GitHub, Hetzner, or Cloudflare credentials
+- **THEN** credentials are verified, encrypted, and scoped to that Project
+- **AND** GitHub, Hetzner, and Cloudflare can be connected independently
 
 ### Requirement: Project Management
 The control plane SHALL allow users to create, list, and manage projects linked to GitHub repositories.
@@ -35,10 +62,10 @@ The control plane SHALL trigger deployments via git push webhooks and MCP tool c
 - **THEN** the system validates the request
 - **AND** queues a new deployment
 
-### Requirement: Preview URLs
+### Requirement: Preview URLs (Target)
 The control plane SHALL generate unique preview URLs for pull request deployments.
 
-#### Scenario: PR preview deployment
+#### Scenario: PR preview deployment (Target)
 - **GIVEN** a pull request is opened against a linked repository
 - **WHEN** the agent completes a preview build
 - **THEN** the system registers a preview URL at `<branch>.<project>.workers.dev`
@@ -53,7 +80,7 @@ The control plane SHALL maintain persistent WebSocket connections to agents runn
 - **THEN** the system authenticates the agent via API token
 - **AND** registers it as available for deployments
 
-#### Scenario: Agent disconnect
+#### Scenario: Agent disconnect (Target)
 - **GIVEN** a connected agent
 - **WHEN** the WebSocket connection drops
 - **THEN** the system marks the agent as offline

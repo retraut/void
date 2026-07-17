@@ -67,6 +67,8 @@ pub enum AgentOut {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         metrics: Option<Metrics>,
     },
+    #[serde(rename = "inventory")]
+    Inventory { inventory: serde_json::Value },
     #[serde(rename = "log")]
     Log {
         deployment_id: String,

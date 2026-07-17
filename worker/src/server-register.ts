@@ -36,6 +36,7 @@ export interface RegisterServerInput {
 	region?: string;
 	/** Optional: the Hetzner size to record in D1 (informational only for manual). */
 	size?: string;
+	project_id?: string;
 }
 
 export interface RegisterServerResult {
@@ -64,6 +65,8 @@ export async function registerServerForUser(
 	const serverId = `srv_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 	const setupToken = `set_${crypto.randomUUID().replace(/-/g, "")}`;
 	const now = Math.floor(Date.now() / 1000);
+	const { ensureDefaultProject } = await import("./projects");
+	const projectId = input.project_id || (await ensureDefaultProject(env, userId)).id;
 
 	// Sensible default name if the caller didn't provide one.
 	const name = (input.name?.trim() || `manual-${serverId.slice(-6)}`).toLowerCase();
@@ -72,10 +75,10 @@ export async function registerServerForUser(
 	await env.void_db
 		.prepare(
 			`INSERT INTO servers (
-				id, user_id, name, provider, status, setup_token, created_at
-			) VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+				id, user_id, project_id, name, provider, status, setup_token, created_at
+			) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
 		)
-		.bind(serverId, userId, name, "manual", setupToken, now)
+		.bind(serverId, userId, projectId, name, "manual", setupToken, now)
 		.run();
 
 	const apiBase = new URL(requestUrl).origin.replace(/^http/, "wss");

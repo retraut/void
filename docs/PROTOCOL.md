@@ -1,5 +1,10 @@
 # void Agent ↔ Control Plane Protocol
 
+> **Status: Current, normative human-readable contract.** Runtime acceptance is
+> enforced by `worker/src/protocol.ts` and `agent/src/protocol.rs`; all three
+> representations and their tests must change together. See
+> [ARCHITECTURE.md](ARCHITECTURE.md) for component responsibilities.
+
 ## Transport
 
 - **WebSocket** (TLS in production, plain in dev)
@@ -38,11 +43,70 @@ After successful first register, Worker replies with `registered` containing a `
 ```json
 {
   "type": "heartbeat",
-  "timestamp": 1747526400
+  "timestamp": 1747526400,
+  "metrics": {
+    "cpu_percent": 42.5,
+    "memory_mb": 512.0,
+    "memory_percent": 25.0,
+    "load_avg": [1.2, 0.8, 0.5],
+    "cpu_count": 4,
+    "pressure_tier": "light"
+  }
 }
 ```
 
-Sent every **30 seconds**. Resets the DO's `lastHeartbeat` timer.
+Sent every **5 seconds** after the agent receives `registered`. Resets the DO's
+`lastHeartbeat` timer.
+
+`metrics` is optional. When present:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `cpu_percent` | number (0–100) | Overall CPU usage |
+| `memory_mb` | number | Memory used in MB |
+| `memory_percent` | number (0–100) | Memory usage percentage |
+| `load_avg` | `[number, number, number]` | 1/5/15-min load average |
+| `cpu_count` | integer | Number of logical CPU cores |
+| `pressure_tier` | `"light"` \| `"medium"` \| `"high"` \| `"extra-high"` | Per-core pressure classification |
+
+### inventory
+
+```json
+{
+  "type": "inventory",
+  "inventory": {
+    "hostname": "void-lab",
+    "os": "Ubuntu 26.04 LTS",
+    "kernel": "6.14.0",
+    "architecture": "x86_64",
+    "uptime_seconds": 3600,
+    "cpu_count": 4,
+    "total_memory_mb": 4096,
+    "disk": { "total_gb": 40.0, "used_gb": 8.2, "used_percent": 21 },
+    "network": {
+      "addresses": ["192.168.1.10"],
+      "primary_ipv4": "192.168.1.10",
+      "open_ports": [{ "protocol": "tcp", "address": "0.0.0.0", "port": 22, "process": "sshd" }]
+    },
+    "firewall": { "backend": "ufw", "active": true, "summary": [] },
+    "ssh": {
+      "port": 22,
+      "password_authentication": false,
+      "permit_root_login": "prohibit-password",
+      "users": [{ "username": "ubuntu", "uid": 1000, "shell": "/bin/bash", "keys": [] }]
+    },
+    "certificates": []
+  }
+}
+```
+
+Sent by the agent after a successful `registered` response. The payload is a
+read-only server snapshot used by the Server view. It may include system
+metadata, resource capacity, network listeners, firewall status, SSH settings,
+interactive users, public-key fingerprints, and certificate expiry metadata.
+Private SSH keys, certificate private keys, environment variables, and raw log
+contents are never included. The Worker stores the latest snapshot and uses its
+`network.primary_ipv4` to populate the server IP when available.
 
 ### log
 
@@ -121,7 +185,7 @@ Agent must reply with `ready { timestamp }`.
     { "cmd": "node dist/server.js", "timeout_s": 300 },
     { "cmd": "cloudflared tunnel --no-autoupdate run", "env": { "TUNNEL_TOKEN": "base64-tunnel-credential" }, "timeout_s": 300 }
   ],
-  "sig": "v1.abc123deadbeef..."
+  "sig": "v1.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 }
 ```
 
@@ -132,6 +196,10 @@ Each step:
 - `cwd` (optional): working directory; defaults to the deployment work dir.
 - `env` (optional): extra environment variables (e.g. `TUNNEL_TOKEN`).
 - `timeout_s` (optional, default 300): kill the command (and report failure) after this many seconds.
+
+`cwd` is accepted by both runtime schemas, but the current Worker pipeline
+builder does not emit it. With HMAC enabled, do not introduce `cwd` until both
+canonical signing implementations include it identically.
 
 `sig` is HMAC-SHA256 of the canonical JSON (all fields except `sig` itself) signed with `AGENT_SHARED_SECRET`. Format: `"v1.<hex>"`. If `AGENT_SHARED_SECRET` is configured on the agent side and `sig` is missing or invalid, agent rejects with `{"type":"error","code":"invalid_signature"}` or `"missing_signature"`.
 
@@ -144,6 +212,20 @@ Each step:
 ```
 
 Agent calls `std::process::exit(0)`.
+
+### token_rotation
+
+```json
+{
+  "type": "token_rotation",
+  "session_token": "sess_a1b2c3d4e5f67890abcdef12345678",
+  "sig": "v1.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+Pushes a freshly-rotated `session_token` to the agent **over the existing WebSocket** without disconnecting. Sent periodically (hourly) by the Durable Object. Agent writes the new token to `<state_dir>/session_token` and uses it for future reconnects.
+
+`sig` is HMAC-SHA256 of the canonical JSON `{"type":"token_rotation","session_token":"..."}` signed with `AGENT_SHARED_SECRET` (same scheme as `pipeline`). If `AGENT_SHARED_SECRET` is not configured on the worker side, `sig` is omitted and verification is skipped on the agent (dev mode only).
 
 ---
 
@@ -207,6 +289,10 @@ Agent                     Worker (VoidCell)           D1
   │    *only on first register │   session_token=...,   │
   │                            │   setup_token=NULL     │
   │                            │<── ok ────────────────│
+  │                            │                        │
+  │──── inventory ───────────>│                        │
+  │                            │── UPDATE servers      │
+  │                            │    inventory snapshot │
 ```
 
 ---
@@ -214,7 +300,9 @@ Agent                     Worker (VoidCell)           D1
 ## Deploy Lifecycle
 
 ```
-MCP/REST ── POST /cell/{id}/send-deploy ──> VoidCell
+MCP/webhook ── INSERT deployment (queued) ──> D1
+     │
+     └── POST /cell/{id}/send-deploy ───────> VoidCell
                                                │
                           (validate ref/repo_url/command)
                           (build ordered shell steps)
@@ -231,17 +319,18 @@ MCP/REST ── POST /cell/{id}/send-deploy ──> VoidCell
                           │     (streamed live)          │
                           │<── deploy_done ───────────── WS
                           │                              │
-                          ├── SSE ──> subscribers
-                          │     (log + deploy_done)
-                          │
-                          └── D1 INSERT deployment
+						  └── SSE ──> subscribers
+								(log + deploy_done)
 ```
+
+The cell persists `deploy_done` to D1 as `running` or `failed`, including the
+error and terminal timing, before broadcasting the terminal SSE event.
 
 ---
 
 ## Signing Scheme
 
-Messages sent from Worker to Agent over WS include an HMAC-SHA256 signature.
+Messages sent from Worker to Agent over WS can include an HMAC-SHA256 signature.
 
 **Fields included in signature:** All fields of the `pipeline` frame **except** `sig` itself — i.e. `type`, `deployment_id`, and `steps`.  
 **Signed content:** `JSON.stringify({ type: "pipeline", deployment_id, steps })` where each step is `{ cmd, env?, timeout_s }` (absent `cwd`/`env` are omitted, and `timeout_s` is always present), with `steps` serialized in order. This MUST byte-for-byte match the agent's `PipelineNoSig` canonical JSON (`serde_json::to_string` of `{ type, deployment_id, steps }` with `cwd`/`env` skipped when empty).  

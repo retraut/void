@@ -1,0 +1,23 @@
+{
+  "contract": "src/protocol-sync.prose.md",
+  "name": "protocol-sync",
+  "timestamp": 1783759712,
+  "drift": [],
+  "frame_matches": {
+    "agent_to_worker": ["register","heartbeat","log","deploy_done","ready"],
+    "worker_to_agent": ["registered","ping","shutdown","pipeline","error","token_rotation"]
+  },
+  "enum_matches": {
+    "LogStream": "match",
+    "DeployStatus": "match",
+    "PressureTier": "match"
+  },
+  "doc_coverage": {
+    "frames_documented": ["register","heartbeat","log","deploy_done","ready","registered","ping","pipeline","shutdown","error","token_rotation"],
+    "frames_missing": [],
+    "fields_missing": []
+  },
+  "code_sync": true,
+  "doc_outdated": false,
+  "protocol_hash": "4fbefb44c76f8e47e1d88aa0c21289ee0cfadcb21ed84ddfea903575ed0c365e"
+}

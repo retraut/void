@@ -56,6 +56,7 @@ async function verifyHmac(secret: string, body: string, signature: string | null
 
 interface TriggerResult {
 	deployment_id: string;
+	repository_id: string;
 	project_id: string;
 	kind: "production" | "preview";
 	build?: string;
@@ -69,6 +70,7 @@ interface TriggerResult {
 export async function triggerDeploy(
 	env: Env,
 	args: {
+		repository_id: string;
 		project_id: string;
 		server_id: string;
 		repo_url: string;
@@ -79,6 +81,7 @@ export async function triggerDeploy(
 		port?: number;
 		hostname?: string;
 		env?: Record<string, string>;
+		clone_env?: Record<string, string>;
 	},
 ): Promise<TriggerResult | { error: string }> {
 	const deploymentId = `dep_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -149,11 +152,12 @@ const { encrypt } = await import("./crypto");
 	const now = Math.floor(Date.now() / 1000);
 	await env.void_db
 		.prepare(
-			`INSERT INTO deployments (id, project_id, server_id, ref, commit_sha, status, started_at, hostname, public_url, dns_record_id, port)
-			 VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+			`INSERT INTO deployments (id, repository_id, project_id, server_id, ref, commit_sha, status, started_at, hostname, public_url, dns_record_id, port)
+			 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
 		)
 		.bind(
 			deploymentId,
+			args.repository_id,
 			args.project_id,
 			args.server_id,
 			args.ref,
@@ -183,11 +187,21 @@ const { encrypt } = await import("./crypto");
 			public_url: publicUrl,
 			tunnel_token: tunnelToken,
 			tunnel_id: tunnelId,
+			clone_env: args.clone_env,
 		}),
 	});
+	if (!sendResp.ok) {
+		const failed = await sendResp.json().catch(() => ({ error: "agent dispatch failed" })) as { error?: string };
+		await env.void_db
+			.prepare("UPDATE deployments SET status = 'failed', error = ?, finished_at = unixepoch() WHERE id = ?")
+			.bind(failed.error || "agent dispatch failed", deploymentId)
+			.run();
+		return { error: failed.error || "agent dispatch failed" };
+	}
 
 	return {
 		deployment_id: deploymentId,
+		repository_id: args.repository_id,
 		project_id: args.project_id,
 		kind: hostname && hostname.startsWith("pr-") ? "preview" : "production",
 		build: args.build_command,
@@ -224,39 +238,48 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 		return new Response("missing repository.full_name", { status: 400 });
 	}
 
-	// Look up project by exact repo URL match (defense against LIKE injection)
-	const project = await env.void_db
+	// Look up repository by exact GitHub full name.
+	const repository = await env.void_db
 		.prepare(
-			"SELECT id, server_id, slug, default_branch, default_port, build_command, serve_command FROM projects WHERE repo_url = ?",
+			`SELECT r.id, r.project_id, r.slug, r.clone_url, r.default_branch, r.default_port,
+			        r.build_command, r.serve_command,
+			        (SELECT id FROM servers s WHERE s.project_id = r.project_id AND s.status = 'active' ORDER BY s.created_at LIMIT 1) AS server_id
+			 FROM repositories r WHERE r.full_name = ?`,
 		)
-		.bind(`https://github.com/${repoFullName}`)
+		.bind(repoFullName)
 		.first<{
 			id: string;
-			server_id: string;
+			project_id: string;
+			server_id: string | null;
 			slug: string;
+			clone_url: string;
 			default_branch: string;
 			default_port: number;
 			build_command: string | null;
 			serve_command: string | null;
 		}>();
 
-	if (!project) {
+	if (!repository) {
 		// Not a project we own. Return 200 so GitHub doesn't retry, but log.
 		return jsonResponse({
 			ignored: true,
 			reason: `no project registered for ${repoFullName}`,
 		});
 	}
+	if (!repository.server_id) return jsonResponse({ ignored: true, reason: "no active server in project" });
+	const { getGithubToken, githubCloneEnv } = await import("./github-connections");
+	const githubToken = await getGithubToken(env, repository.project_id);
+	const cloneEnv = githubToken ? githubCloneEnv(githubToken) : undefined;
 
 	// Dispatch by event type
 	if (event === "push") {
 		const push = payload as PushPayload;
 		const branch = push.ref.replace(/^refs\/heads\//, "");
-		if (branch !== project.default_branch) {
+		if (branch !== repository.default_branch) {
 			// push to a non-default branch — ignore (PRs cover that)
 			return jsonResponse({
 				ignored: true,
-				reason: `push to ${branch} (not default branch ${project.default_branch})`,
+				reason: `push to ${branch} (not default branch ${repository.default_branch})`,
 			});
 		}
 		// Validate inputs (defense in depth — same checks happen in MCP path)
@@ -264,24 +287,26 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 		if (!refCheck.ok) {
 			return jsonResponse({ error: refCheck.reason }, 400);
 		}
-		if (project.build_command) {
-			const c = validateShellCommand(project.build_command, "build_command");
+		if (repository.build_command) {
+			const c = validateShellCommand(repository.build_command, "build_command");
 			if (!c.ok) return jsonResponse({ error: c.reason }, 400);
 		}
-		if (project.serve_command) {
-			const c = validateShellCommand(project.serve_command, "serve_command");
+		if (repository.serve_command) {
+			const c = validateShellCommand(repository.serve_command, "serve_command");
 			if (!c.ok) return jsonResponse({ error: c.reason }, 400);
 		}
 		const commitSha = push.head_commit?.id;
 		const result = await triggerDeploy(env, {
-			project_id: project.id,
-			server_id: project.server_id,
-			repo_url: `https://github.com/${repoFullName}`,
+			repository_id: repository.id,
+			project_id: repository.project_id,
+			server_id: repository.server_id,
+			repo_url: repository.clone_url,
 			ref: branch,
 			commit_sha: commitSha,
-			build_command: project.build_command || undefined,
-			serve_command: project.serve_command || undefined,
-			port: project.default_port,
+			build_command: repository.build_command || undefined,
+			serve_command: repository.serve_command || undefined,
+			port: repository.default_port,
+			clone_env: cloneEnv,
 		});
 		return jsonResponse({ event: "push", branch, ...result });
 	}
@@ -299,10 +324,10 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 		const prSha = pr.pull_request.head.sha;
 		const baseBranch = pr.pull_request.base.ref;
 		// only deploy PRs targeting the project's default branch
-		if (baseBranch !== project.default_branch) {
+		if (baseBranch !== repository.default_branch) {
 			return jsonResponse({
 				ignored: true,
-				reason: `pr targets ${baseBranch}, not ${project.default_branch}`,
+				reason: `pr targets ${baseBranch}, not ${repository.default_branch}`,
 			});
 		}
 		// Validate PR ref
@@ -310,25 +335,27 @@ export async function handleGitHubWebhook(request: Request, env: Env): Promise<R
 		if (!refCheck.ok) {
 			return jsonResponse({ error: refCheck.reason }, 400);
 		}
-		if (project.build_command) {
-			const c = validateShellCommand(project.build_command, "build_command");
+		if (repository.build_command) {
+			const c = validateShellCommand(repository.build_command, "build_command");
 			if (!c.ok) return jsonResponse({ error: c.reason }, 400);
 		}
-		if (project.serve_command) {
-			const c = validateShellCommand(project.serve_command, "serve_command");
+		if (repository.serve_command) {
+			const c = validateShellCommand(repository.serve_command, "serve_command");
 			if (!c.ok) return jsonResponse({ error: c.reason }, 400);
 		}
-		const hostname = `pr-${prNumber}-${project.slug}`;
+		const hostname = `pr-${prNumber}-${repository.slug}`;
 		const result = await triggerDeploy(env, {
-			project_id: project.id,
-			server_id: project.server_id,
-			repo_url: `https://github.com/${repoFullName}`,
+			repository_id: repository.id,
+			project_id: repository.project_id,
+			server_id: repository.server_id,
+			repo_url: repository.clone_url,
 			ref: prBranch,
 			commit_sha: prSha,
-			build_command: project.build_command || undefined,
-			serve_command: project.serve_command || undefined,
-			port: project.default_port,
+			build_command: repository.build_command || undefined,
+			serve_command: repository.serve_command || undefined,
+			port: repository.default_port,
 			hostname,
+			clone_env: cloneEnv,
 		});
 		return jsonResponse({ event: "pull_request", pr: prNumber, branch: prBranch, ...result });
 	}

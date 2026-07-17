@@ -1,0 +1,7 @@
+{
+  "root": "src/protocol-sync.prose.md",
+  "kind": "responsibility",
+  "requires": ["AgentProtocolSchema", "WorkerProtocolSchema", "ProtocolDoc"],
+  "acyclic": true,
+  "execution": "inline-audit"
+}

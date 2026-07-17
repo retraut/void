@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { api } from "../api";
 import { usePolling } from "../hooks";
@@ -65,7 +65,7 @@ function ServerCard({ server }: { server: ServerSummary }) {
               <MetricBar
                 label="Mem"
                 percent={metrics.memory_percent}
-                detail={`${metrics.memory_mb} MB`}
+                detail={`${Math.round(metrics.memory_mb)} MB`}
               />
               <div className="flex items-center justify-between">
                 <span className="text-xs text-void-dim">Load</span>
@@ -92,8 +92,8 @@ function ServerCard({ server }: { server: ServerSummary }) {
 
       <div className="mt-4 flex items-center justify-between border-t border-void-border pt-3 text-xs text-void-dim">
         <span>
-          {server.project_repo_url ? (
-            <span className="font-mono text-void-dim">{server.project_repo_url}</span>
+		  {server.project_name ? (
+			<span className="font-mono text-void-dim">{server.project_name}</span>
           ) : (
             "no project"
           )}
@@ -137,7 +137,11 @@ function ServerCard({ server }: { server: ServerSummary }) {
 }
 
 export default function Servers() {
-  const { data, loading, error, refresh } = usePolling(() => api.servers(), 5000);
+	const navigate = useNavigate();
+	const [searchParams] = useSearchParams();
+	const projectId = searchParams.get("project");
+	const openProject = () => navigate(projectId ? `/projects/${projectId}` : "/projects");
+  const { data, loading, error, refresh } = usePolling(() => api.servers(projectId), 5000);
   const [search, setSearch] = useState("");
 
   const servers = data?.servers ?? [];
@@ -157,10 +161,10 @@ export default function Servers() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <a href="/servers/new" className="btn-primary">
-            + New server
-          </a>
-          <button className="btn-secondary" onClick={refresh} title="Refresh">
+		  <button className="btn-primary shrink-0" onClick={openProject}>
+			+ Add server
+		  </button>
+          <button className="btn-secondary h-10 w-10 shrink-0 px-0" onClick={refresh} title="Refresh" aria-label="Refresh servers">
             ⟳
           </button>
         </div>
@@ -177,9 +181,7 @@ export default function Servers() {
       ) : filtered.length === 0 ? (
         <div className="card flex flex-col items-center gap-3 p-12 text-center">
           <div className="text-void-dim">No servers match.</div>
-          <a href="/servers/new" className="btn-primary">
-            + Create your first server
-          </a>
+		  <button className="btn-primary" onClick={openProject}>+ Add server</button>
         </div>
       ) : (
         <motion.div layout className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

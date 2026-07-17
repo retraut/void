@@ -21,7 +21,8 @@ async function importKey(secret: string): Promise<CryptoKey> {
 		const hash = await crypto.subtle.digest("SHA-256", raw);
 		key = new Uint8Array(hash);
 	}
-	return crypto.subtle.importKey("raw", key, ALGO, false, ["encrypt", "decrypt"]);
+	const keyBuffer = new Uint8Array(key).buffer;
+	return crypto.subtle.importKey("raw", keyBuffer, ALGO, false, ["encrypt", "decrypt"]);
 }
 
 /**
@@ -63,7 +64,11 @@ export async function decrypt(secret: string, blob: string): Promise<string | nu
 		combined.set(body, 0);
 		combined.set(tag, body.length);
 		const key = await importKey(secret);
-		const pt = await crypto.subtle.decrypt({ name: ALGO, iv }, key, combined);
+		const pt = await crypto.subtle.decrypt(
+			{ name: ALGO, iv: new Uint8Array(iv).buffer },
+			key,
+			new Uint8Array(combined).buffer,
+		);
 		return new TextDecoder().decode(pt);
 	} catch {
 		return null;
@@ -76,7 +81,7 @@ function b64(bytes: Uint8Array): string {
 	return btoa(s);
 }
 
-function fromB64(s: string): Uint8Array {
+function fromB64(s: string): Uint8Array<ArrayBuffer> {
 	const bin = atob(s);
 	const out = new Uint8Array(bin.length);
 	for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);

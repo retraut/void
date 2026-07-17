@@ -41,7 +41,7 @@ export interface PasskeyRow {
 	id: string;
 	user_id: string;
 	credential_id: string;
-	credential_public_key: Uint8Array;
+	credential_public_key: Uint8Array<ArrayBuffer>;
 	counter: number;
 	transports: string | null;
 	name: string;

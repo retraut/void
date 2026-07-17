@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { usePolling } from "../hooks";
 import { Skeleton, StatusPill } from "../components/ui";
@@ -21,7 +21,9 @@ function Stat({ label, value, sub }: { label: string; value: string | number; su
 }
 
 export default function Dashboard() {
-  const { data, loading } = usePolling(() => api.dashboard(), 5000);
+  const [searchParams] = useSearchParams();
+  const projectId = searchParams.get("project");
+  const { data, loading } = usePolling(() => api.dashboard(projectId), 5000);
 
   if (loading && !data) {
     return (
@@ -64,8 +66,8 @@ export default function Dashboard() {
                 className="flex items-center justify-between rounded-lg border border-void-border px-3 py-2"
               >
                 <div className="min-w-0">
-                  <div className="truncate text-sm text-white">{d.project_name ?? "—"}</div>
-                  <div className="text-xs text-void-dim">{d.ref}</div>
+				  <div className="truncate text-sm text-white">{d.repository_name ?? "—"}</div>
+				  <div className="text-xs text-void-dim">{d.project_name ?? "—"} · {d.ref}</div>
                 </div>
                 <div className="flex items-center gap-3">
                   <StatusPill status={d.status as DeploymentStatus} />

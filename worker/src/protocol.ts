@@ -93,6 +93,14 @@ export const HeartbeatFrameSchema = z
 	})
 	.strict();
 
+/** Read-only server inventory collected by the agent after registration. */
+export const InventoryFrameSchema = z
+	.object({
+		type: z.literal("inventory"),
+		inventory: z.record(z.string(), z.unknown()),
+	})
+	.strict();
+
 export const LogFrameSchema = z
 	.object({
 		type: z.literal("log"),
@@ -129,6 +137,7 @@ export const ReadyFrameSchema = z
 export const AgentOutFrameSchema = z.discriminatedUnion("type", [
 	RegisterFrameSchema,
 	HeartbeatFrameSchema,
+	InventoryFrameSchema,
 	LogFrameSchema,
 	DeployDoneFrameSchema,
 	ReadyFrameSchema,

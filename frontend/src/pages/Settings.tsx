@@ -17,127 +17,6 @@ function Section({ title, desc, children }: { title: string; desc?: string; chil
   );
 }
 
-function CloudProviders({ data }: { data: SettingsData }) {
-  const [token, setToken] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  const [testing, setTesting] = useState(false);
-
-  const save = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setMsg(null);
-    try {
-      const res = await fetch("/settings/hetzner", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        credentials: "same-origin",
-        body: new URLSearchParams({ token }).toString(),
-      });
-      if (res.ok) {
-        setMsg({ kind: "ok", text: "Hetzner token saved & verified." });
-        setToken("");
-      } else {
-        const url = new URL(res.url);
-        setMsg({ kind: "err", text: url.searchParams.get("msg") ?? "save failed" });
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const test = async () => {
-    setTesting(true);
-    setMsg(null);
-    try {
-      const fd = new FormData();
-      fd.append("token", token);
-      const res = await fetch("/settings/hetzner/test", { method: "POST", body: fd, credentials: "same-origin" });
-      const j = await res.json();
-      if (j.ok) setMsg({ kind: "ok", text: `Token works — ${j.datacenters} datacenters reachable.` });
-      else setMsg({ kind: "err", text: j.reason ?? "verification failed" });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const del = async () => {
-    await fetch("/settings/hetzner/delete", { method: "POST", credentials: "same-origin" });
-    window.location.reload();
-  };
-
-  const cred = data.hetzner_cred;
-  return (
-    <Section
-      title="Cloud providers"
-      desc="Connect a cloud provider to provision servers. Your API token is encrypted at rest and only used to call the provider's API."
-    >
-      <div className="flex items-start gap-4 rounded-xl border border-void-border bg-void-bg/40 p-4">
-        <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg">
-          <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" className="h-10 w-10">
-            <rect width="32" height="32" rx="6" fill="#D50C2D" />
-            <path d="M9 7v18h3v-7h8v7h3V7h-3v8h-8V7z" fill="white" />
-          </svg>
-        </div>
-        <div className="flex-1">
-          <div className="font-medium text-white">Hetzner Cloud</div>
-          <div className="text-xs text-void-dim">
-            {cred ? (
-              <span className="text-void-ok">✓ Token saved {timeAgo(cred.created_at)}</span>
-            ) : (
-              <span className="text-void-warn">Not configured</span>
-            )}
-            {cred?.verified_datacenters ? (
-              <span> · {cred.verified_datacenters} datacenters reachable</span>
-            ) : null}
-          </div>
-        </div>
-        {cred && (
-          <button className="btn-secondary" onClick={del}>
-            Delete token
-          </button>
-        )}
-      </div>
-
-      {!cred && (
-        <form onSubmit={save} className="mt-4 flex flex-wrap items-start gap-3">
-          <input
-            className="input flex-1"
-            type="password"
-            placeholder="Hetzner API token"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-          />
-          <button type="button" className="btn-secondary" onClick={test} disabled={!token || testing}>
-            {testing ? <Spinner size={14} /> : "Test"}
-          </button>
-          <button className="btn-primary" disabled={!token || busy}>
-            {busy ? <Spinner size={14} /> : "Save"}
-          </button>
-        </form>
-      )}
-      {msg && (
-        <div className={`mt-3 text-sm ${msg.kind === "ok" ? "text-void-ok" : "text-void-err"}`}>{msg.text}</div>
-      )}
-      <p className="mt-2 text-xs text-void-dim">
-        Get a token at{" "}
-        <a
-          href="https://console.hetzner.cloud"
-          target="_blank"
-          rel="noopener"
-          className="text-[#ff5a6e] hover:underline"
-        >
-          console.hetzner.cloud
-        </a>{" "}
-        → Choose your project → Security → API Tokens
-      </p>
-      {!cred && data.env_has_hetzner_token && (
-        <p className="mt-2 text-xs text-void-dim">Tip: env HETZNER_TOKEN is also set as a fallback for this deployment.</p>
-      )}
-    </Section>
-  );
-}
-
 function Passkeys({ data, onChange }: { data: SettingsData; onChange: () => void }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -330,7 +209,6 @@ export default function Settings() {
       )}
 
       <div className="space-y-4">
-        <CloudProviders data={data} />
         <Passkeys data={data} onChange={reload} />
         <SystemSettings data={data} />
       </div>

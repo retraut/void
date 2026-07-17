@@ -11,6 +11,7 @@ mod config;
 mod connection;
 mod crypto;
 mod deploy;
+mod inventory;
 mod keys;
 mod log;
 mod logging;

@@ -175,6 +175,10 @@ async fn handle_incoming(
                 let _ = std::fs::write(token_path, token);
                 info!("session_token saved to disk");
             }
+            let inventory = AgentOut::Inventory { inventory: crate::inventory::collect() };
+            if let Err(error) = ws.send(Message::text(serde_json::to_string(&inventory)?)).await {
+                warn!(error = %error, "failed to send server inventory");
+            }
             return Ok(true);
         }
         WorkerToAgent::Ping {} => {

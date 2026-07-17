@@ -26,14 +26,14 @@ source "$SCRIPT_DIR/lib.sh"
 section "test-lab: preflight"
 check_prereqs
 
-# 1. D1 must have a user. Idempotent — provision.sh is a no-op if
-#    the user already exists.
-"$SCRIPT_DIR/provision.sh" > /dev/null
-
-# 2. wrangler dev must be running so we can talk to the API and
+# 1. wrangler dev must be running so we can talk to the API and
 #    the agent can register against it.
 section "test-lab: panel (wrangler dev)"
 wrangler_start
+
+# 2. D1 must have a user. Idempotent — provision.sh is a no-op if
+#    the user already exists. It needs the worker above for its API check.
+"$SCRIPT_DIR/provision.sh" > /dev/null
 
 # 3. The agent VM. Create it on first run (~2 min); reuse it on
 #    subsequent runs. agent-vm.sh create also registers the server
