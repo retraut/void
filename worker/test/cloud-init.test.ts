@@ -46,6 +46,8 @@ describe("buildCloudInit()", () => {
 		expect(userData).toContain("[Service]");
 		expect(userData).toContain("ExecStart=/usr/local/bin/void-agent");
 		expect(userData).toContain("Restart=always");
+		expect(userData).toContain("Nice=-20");
+		expect(userData).toContain("OOMScoreAdjust=-1000");
 		expect(userData).toContain("WantedBy=multi-user.target");
 		expect(userData).toContain("systemctl daemon-reload");
 		expect(userData).toContain("systemctl enable --now void-agent.service");

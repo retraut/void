@@ -13,15 +13,48 @@ CREATE TABLE IF NOT EXISTS users (
 	created_at INTEGER DEFAULT (unixepoch())
 );
 
+-- Top-level aggregate. The product calls this a "Project". Projects keeps
+-- the storage name unambiguous next to deployable repositories.
+CREATE TABLE IF NOT EXISTS projects (
+	id TEXT PRIMARY KEY,
+	user_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	slug TEXT NOT NULL,
+	is_default INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+	UNIQUE(user_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS github_connections (
+	id TEXT PRIMARY KEY,
+	project_id TEXT NOT NULL UNIQUE,
+	user_id TEXT NOT NULL,
+	github_id TEXT NOT NULL,
+	login TEXT NOT NULL,
+	avatar_url TEXT,
+	encrypted_token TEXT NOT NULL,
+	created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+	updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+	FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_github_connections_user ON github_connections(user_id);
+
 CREATE TABLE IF NOT EXISTS servers (
 	id TEXT PRIMARY KEY,
 	user_id TEXT,
+	project_id TEXT NOT NULL,
 	name TEXT,
 	provider TEXT,
 	provider_server_id TEXT,
 	ip_address TEXT,
 	region TEXT,
 	size TEXT,
+	cpu INTEGER,
+	memory INTEGER,
+	disk INTEGER,
+	inventory_json TEXT,
+	inventory_collected_at INTEGER,
 	agent_public_key TEXT,
 	setup_token TEXT,
 	setup_token_consumed_at INTEGER,
@@ -35,24 +68,29 @@ CREATE TABLE IF NOT EXISTS servers (
 	last_seen_at INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS projects (
+CREATE TABLE IF NOT EXISTS repositories (
 	id TEXT PRIMARY KEY,
-	user_id TEXT,
-	server_id TEXT,
+	project_id TEXT NOT NULL,
+	github_connection_id TEXT NOT NULL,
+	github_repo_id TEXT NOT NULL,
 	slug TEXT,
 	name TEXT,
-	repo_url TEXT,
+	full_name TEXT NOT NULL,
+	private INTEGER NOT NULL DEFAULT 0,
+	clone_url TEXT NOT NULL,
 	default_branch TEXT DEFAULT 'main',
 	default_port INTEGER DEFAULT 3000,
 	build_command TEXT,
 	serve_command TEXT,
 	created_at INTEGER DEFAULT (unixepoch()),
-	UNIQUE(user_id, slug)
+	UNIQUE(project_id, github_repo_id),
+	UNIQUE(project_id, slug)
 );
 
 CREATE TABLE IF NOT EXISTS deployments (
 	id TEXT PRIMARY KEY,
-	project_id TEXT,
+	repository_id TEXT,
+	project_id TEXT NOT NULL,
 	server_id TEXT,
 	ref TEXT,
 	commit_sha TEXT,
@@ -69,20 +107,24 @@ CREATE TABLE IF NOT EXISTS deployments (
 	duration_ms INTEGER
 );
 
+CREATE INDEX IF NOT EXISTS idx_deployments_repository ON deployments(repository_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_servers_user ON servers(user_id);
-CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_servers_project ON servers(project_id);
+CREATE INDEX IF NOT EXISTS idx_repositories_project ON repositories(project_id, created_at);
 
 CREATE TABLE IF NOT EXISTS provider_credentials (
 	id TEXT PRIMARY KEY,
 	user_id TEXT NOT NULL,
-	provider TEXT CHECK(provider IN ('hetzner')) NOT NULL,
+	project_id TEXT NOT NULL,
+	provider TEXT NOT NULL,
 	encrypted_token TEXT NOT NULL,
 	verified_datacenters INTEGER,
+	metadata_json TEXT,
 	created_at INTEGER DEFAULT (unixepoch()),
-	UNIQUE(user_id, provider)
+	UNIQUE(project_id, provider)
 );
-CREATE INDEX IF NOT EXISTS idx_provider_credentials_user ON provider_credentials(user_id);
+CREATE INDEX IF NOT EXISTS idx_provider_credentials_project ON provider_credentials(project_id);
 
 CREATE TABLE IF NOT EXISTS passkeys (
 	id TEXT PRIMARY KEY,
@@ -110,48 +152,13 @@ CREATE TABLE IF NOT EXISTS system_settings (
 );
 `;
 
-// SQLite has no IF NOT EXISTS on ALTER TABLE ADD COLUMN, so we catch the error.
-const COLUMN_MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
-	{ table: "servers", column: "tunnel_id", type: "TEXT" },
-	{ table: "servers", column: "tunnel_name", type: "TEXT" },
-	{ table: "servers", column: "tunnel_token", type: "TEXT" },
-	{ table: "servers", column: "setup_token", type: "TEXT" },
-	{ table: "servers", column: "setup_token_consumed_at", type: "INTEGER" },
-	{ table: "servers", column: "session_token", type: "TEXT" },
-	{ table: "servers", column: "session_token_created_at", type: "INTEGER" },
-	{ table: "servers", column: "tunnel_token_encrypted", type: "TEXT" },
-	{ table: "servers", column: "hetzner_project_id", type: "INTEGER" },
-	{ table: "servers", column: "hetzner_project_name", type: "TEXT" },
-	{ table: "servers", column: "cpu", type: "INTEGER" },
-	{ table: "servers", column: "memory", type: "INTEGER" },
-	{ table: "servers", column: "disk", type: "INTEGER" },
-	{ table: "projects", column: "build_command", type: "TEXT" },
-	{ table: "projects", column: "serve_command", type: "TEXT" },
-	{ table: "deployments", column: "hostname", type: "TEXT" },
-	{ table: "deployments", column: "public_url", type: "TEXT" },
-	{ table: "deployments", column: "dns_record_id", type: "TEXT" },
-	{ table: "deployments", column: "port", type: "INTEGER" },
-	{ table: "provider_credentials", column: "verified_datacenters", type: "INTEGER" },
-];
-
-let migrated = false;
+let initialized = false;
 
 export async function ensureSchema(db: D1Database): Promise<void> {
-	if (migrated) return;
+	if (initialized) return;
 	const statements = SCHEMA.split(";").map((s) => s.trim()).filter(Boolean);
 	for (const sql of statements) {
 		await db.prepare(sql).run();
 	}
-	for (const m of COLUMN_MIGRATIONS) {
-		try {
-			await db.prepare(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.type}`).run();
-		} catch (e: any) {
-			// "duplicate column name" is fine — means it already exists
-			if (!String(e?.message || e).includes("duplicate column")) {
-				// re-throw if it's a different error
-				throw e;
-			}
-		}
-	}
-	migrated = true;
+	initialized = true;
 }

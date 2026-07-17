@@ -157,6 +157,10 @@ export async function getSessionUser(c: Context): Promise<{ id: string; username
 		.prepare("SELECT id, username, avatar_url FROM users WHERE id = ?")
 		.bind(session.user_id)
 		.first()) as { id: string; username: string; avatar_url: string | null } | null;
+	if (user) {
+		const { ensureDefaultProject } = await import("./projects");
+		await ensureDefaultProject(env, user.id);
+	}
 	return user;
 }
 
@@ -283,6 +287,8 @@ export async function handleAuthCallback(c: Context): Promise<Response> {
 			.bind(userId, String(ghUser.id), ghUser.login, ghUser.avatar_url, tokenData.access_token, now)
 			.run();
 	}
+	const { ensureDefaultProject } = await import("./projects");
+	await ensureDefaultProject(env, userId);
 
 	// Create session — shared with passkey login so both flows produce
 	// the same session shape (KV key, cookie name, cookie attributes).
@@ -321,8 +327,8 @@ export async function handleAuthCallback(c: Context): Promise<Response> {
  * Page is server-rendered, no JS framework, ~50 lines. Auto-redirects
  * after `delayMs` via inline setTimeout. Spinner is pure CSS.
  */
-function authInterstitial(opts: {
-	kind: "login" | "logout";
+export function authInterstitial(opts: {
+	kind: "login" | "logout" | "unauthorized";
 	username?: string;
 	avatarUrl?: string | null;
 	redirectTo: string;
@@ -331,13 +337,21 @@ function authInterstitial(opts: {
 	const title =
 		opts.kind === "login"
 			? `Welcome back, @${opts.username}`
-			: "Signed out";
+			: opts.kind === "unauthorized"
+				? "Unauthorized access"
+				: "Signed out";
 	const subtitle =
 		opts.kind === "login"
 			? "Signed in via GitHub"
-			: "The void will be empty without you.";
+			: opts.kind === "unauthorized"
+				? "This page requires an authenticated session."
+				: "The void will be empty without you.";
 	const tagline =
-		opts.kind === "login" ? "almost there…" : "on the way out…";
+		opts.kind === "login"
+			? "almost there…"
+			: opts.kind === "unauthorized"
+				? "redirecting to the landing page…"
+				: "on the way out…";
 	const avatar =
 		opts.avatarUrl && opts.kind === "login"
 			? `<img class="avatar" src="${opts.avatarUrl}" alt="">`
@@ -351,24 +365,28 @@ function authInterstitial(opts: {
 <title>${escapeHtml(title)} · void</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;background:#000;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-  .card{background:#0a0a0a;border:1px solid #222;border-radius:16px;padding:40px 48px;text-align:center;max-width:380px;width:100%;animation:pop 240ms cubic-bezier(.34,1.56,.64,1) both}
+	  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;background:radial-gradient(1200px 600px at 80% -10%,rgba(124,92,255,.14),transparent 60%),radial-gradient(900px 500px at -10% 10%,rgba(34,211,238,.09),transparent 55%),#08080b;color:#e7e7ee;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+	  .card{background:rgba(14,14,18,.9);border:1px solid #1e1e26;border-radius:16px;padding:40px 48px;text-align:center;max-width:380px;width:100%;box-shadow:0 0 0 1px rgba(124,92,255,.12),0 24px 80px rgba(0,0,0,.42);backdrop-filter:blur(16px);animation:pop 240ms cubic-bezier(.34,1.56,.64,1) both}
   @keyframes pop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
-  .avatar{width:64px;height:64px;border-radius:50%;margin:0 auto 20px;display:block;animation:pop 320ms cubic-bezier(.34,1.56,.64,1) .05s both}
-  .avatar-empty{background:#0a3320;color:#0f0;font-size:32px;line-height:64px;font-weight:600}
+	  .avatar-orbit{position:relative;width:72px;height:72px;margin:0 auto 20px;padding:4px;border-radius:50%;animation:pop 320ms cubic-bezier(.34,1.56,.64,1) .05s both}
+	  .avatar-orbit::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,#7c5cff,#22d3ee,transparent 42%,#7c5cff);animation:orbit 2.8s linear infinite;box-shadow:0 0 28px -5px rgba(124,92,255,.7)}
+	  .avatar-orbit::after{content:"";position:absolute;inset:3px;border-radius:50%;background:#0e0e12}
+	  .avatar{position:relative;z-index:1;width:64px;height:64px;border-radius:50%;display:block;border:3px solid #0e0e12}
+	  .avatar-empty{background:linear-gradient(135deg,#7c5cff,#22d3ee);color:#fff;font-size:31px;line-height:58px;font-weight:600}
+	  @keyframes orbit{to{transform:rotate(360deg)}}
   h1{font-size:1.35rem;font-weight:700;margin-bottom:8px;letter-spacing:-0.01em}
-  p{color:#888;font-size:0.9rem;margin-bottom:24px}
-  .progress{height:3px;background:#1a1a1a;border-radius:2px;overflow:hidden;margin-bottom:8px}
-  .progress-bar{height:100%;background:linear-gradient(90deg,#fff,#888);width:0;animation:fill ${opts.delayMs}ms linear forwards}
+	  p{color:#8b8b99;font-size:0.9rem;margin-bottom:24px}
+	  .progress{height:3px;background:#1e1e26;border-radius:2px;overflow:hidden;margin-bottom:8px}
+	  .progress-bar{height:100%;background:linear-gradient(90deg,#7c5cff,#22d3ee);width:0;box-shadow:0 0 12px rgba(124,92,255,.65);animation:fill ${opts.delayMs}ms linear forwards}
   @keyframes fill{from{width:0}to{width:100%}}
-  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #333;border-top-color:#fff;border-radius:50%;animation:spin 700ms linear infinite;vertical-align:middle;margin-right:6px}
+	  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #292934;border-top-color:#7c5cff;border-radius:50%;animation:spin 700ms linear infinite;vertical-align:middle;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .skip{color:#666;font-size:0.8rem;text-decoration:underline;margin-top:8px;display:inline-block}
+	  .skip{color:#8b8b99;font-size:0.8rem;text-decoration:none;margin-top:8px;display:inline-block;transition:color .15s ease}.skip:hover{color:#e7e7ee}
 </style>
 </head>
 <body>
 <div class="card">
-  ${avatar}
+	  <div class="avatar-orbit">${avatar}</div>
   <h1>${escapeHtml(title)}</h1>
   <p>${escapeHtml(subtitle)}</p>
   <div class="progress"><div class="progress-bar"></div></div>
@@ -441,47 +459,11 @@ export function renderLandingHtml(opts: {
 	// (The marker is a static string defined here — see DEV_AUTH_BUTTON_MARKER.)
 	devAuthButtonMarker?: string;
 }): string {
-	const featureList = [
-		{ name: "GitHub OAuth", on: opts.installed, missing: "GITHUB_CLIENT_ID/SECRET" },
-		{ name: "GitHub webhook", on: opts.github_webhook, missing: "GITHUB_WEBHOOK_SECRET" },
-		{ name: "Cloudflare tunnel", on: opts.cf_tunnel, missing: "CF_API_TOKEN/ACCOUNT/ZONE" },
-		{ name: "Hetzner provisioning", on: !!opts.installed, missing: "HETZNER_TOKEN" },
-	];
-	if (opts.devAuth) {
-		featureList.push({ name: "Dev auth (local-only)", on: true, missing: "VOID_DEV_AUTH=1" });
-	}
-	const featuresHtml = featureList
-		.map(
-			(f) =>
-				`<li><span class="dot ${f.on ? "on" : "off"}"></span>${f.name} <code>${escapeHtml(f.missing)}</code></li>`,
-		)
-		.join("");
-
 	// Marker comment for the dev-login button. The dev-entry
 	// middleware replaces this with the actual button HTML.
 	// The marker is a static string so it appears in both
 	// production and dev bundles; only dev-entry replaces it.
 	const devAuthButtonMarker = opts.devAuthButtonMarker ?? "";
-
-	// Banner shown when GitHub OAuth is not properly configured (placeholder values)
-	// or when a real value is set. Tells the user exactly what to do.
-	const oauthBanner = opts.installed
-		? ""
-		: `<div class="banner">
-			<strong>GitHub OAuth not configured.</strong>
-			The placeholder <code>GITHUB_CLIENT_ID</code> / <code>GITHUB_CLIENT_SECRET</code> from <code>wrangler.jsonc</code> is in use — clicking "Get started" will 404.
-			<br><br>
-			<strong>Fix:</strong> create an OAuth app at
-			<a href="https://github.com/settings/developers" target="_blank" rel="noopener">github.com/settings/developers</a>
-			(callback: <code>${escapeHtml("https://void.retraut.workers.dev/api/auth/callback")}</code>),
-			then run:
-			<br><br>
-			<code>cd worker && npx wrangler secret put GITHUB_CLIENT_ID</code>
-			<br>
-			<code>npx wrangler secret put GITHUB_CLIENT_SECRET</code>
-			<br>
-			<code>npx wrangler secret put COOKIE_SECRET</code> &nbsp;<span style="color:#666">(any random 32+ char string)</span>
-		</div>`;
 
 	// Octocat (GitHub Mark) — single inline SVG, white on dark.
 	// viewBox 16x16 scales cleanly to any size.
@@ -495,9 +477,8 @@ export function renderLandingHtml(opts: {
 				<span>@${escapeHtml(opts.user.username)}</span>
 			</summary>
 			<div class="user-menu-pop">
-				<a href="/servers">Servers</a>
 				<a href="/projects">Projects</a>
-				<a href="/deployments">Deployments</a>
+				<a href="/settings">Account settings</a>
 				<hr>
 				<a href="/api/auth/logout">logout</a>
 			</div>
@@ -512,112 +493,111 @@ export function renderLandingHtml(opts: {
 <title>void — Best DX. Hetzner pricing. No SSH.</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{
-    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;
-    background:#000;
-    color:#fff;
+	  body{
+	    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",system-ui,sans-serif;
+	    background:#08080b;
+	    color:#e7e7ee;
     min-height:100vh;
     display:flex;align-items:center;justify-content:center;
     padding:24px;
     position:relative;
   }
-  /* Glass slab — radial gradient makes the background feel like a
-     frosted glass panel in the dark, lighter on the upper-left, fading
-     to pure black on the right/bottom. The 1px noise SVG overlay adds
-     a subtle film-grain texture so it doesn't look flat. */
-  body::before{
-    content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
-    background:
-      radial-gradient(ellipse 70% 60% at 25% 40%, #1c1c1c 0%, #0a0a0a 45%, #000 80%),
-      linear-gradient(135deg, #161616 0%, #050505 60%, #000 100%);
+	  body::before{
+	    content:"";position:fixed;inset:0;z-index:-2;pointer-events:none;
+	    background:
+	      radial-gradient(700px 540px at 15% 15%,rgba(34,211,238,.13),transparent 65%),
+	      radial-gradient(900px 620px at 88% 0%,rgba(124,92,255,.2),transparent 64%),
+	      radial-gradient(600px 500px at 70% 95%,rgba(124,92,255,.08),transparent 70%),
+	      #08080b;
   }
   body::after{
     content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:0.5;
     background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.025 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
     mix-blend-mode:overlay;
   }
-  /* The wrap is a subtle glass card — translucent with a thin
-     highlight on top, gives the H1 the "etched in glass" look */
-  .wrap{
-    max-width:820px;width:100%;position:relative;
-    padding:48px 40px;
-    border-radius:24px;
-    background:linear-gradient(135deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
-    border:1px solid rgba(255,255,255,0.06);
-    box-shadow:
-      0 20px 60px rgba(0,0,0,0.5),
-      inset 0 1px 0 rgba(255,255,255,0.08);
-    backdrop-filter:blur(20px);
-    -webkit-backdrop-filter:blur(20px);
-  }
+	  .wrap{
+	    max-width:960px;width:100%;position:relative;overflow:hidden;
+	    padding:64px 56px 48px;
+	    border-radius:28px;
+	    background:linear-gradient(135deg,rgba(20,20,25,.82),rgba(10,10,14,.58));
+	    border:1px solid rgba(255,255,255,.08);
+	    box-shadow:
+	      0 30px 100px rgba(0,0,0,.55),
+	      0 0 0 1px rgba(124,92,255,.08),
+	      inset 0 1px 0 rgba(255,255,255,.09);
+	    backdrop-filter:blur(28px);-webkit-backdrop-filter:blur(28px);
+	  }
+	  .wrap::before{content:"";position:absolute;width:420px;height:420px;right:-180px;top:-220px;border-radius:50%;background:rgba(124,92,255,.16);filter:blur(60px);pointer-events:none}
+	  .wrap::after{content:"";position:absolute;width:320px;height:320px;left:-180px;bottom:-220px;border-radius:50%;background:rgba(34,211,238,.1);filter:blur(60px);pointer-events:none}
   .top-right{position:absolute;top:20px;right:24px;display:flex;align-items:center;gap:12px;z-index:2}
-  .gh-link{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;color:#888;transition:color 0.15s,background 0.15s;border-radius:8px}
-  .gh-link:hover{color:#fff;background:rgba(255,255,255,0.04)}
+	  .gh-link{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;color:#8b8b99;transition:all .15s;border-radius:10px;border:1px solid transparent}
+	  .gh-link:hover{color:#fff;background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.08)}
   .gh-link svg{width:22px;height:22px}
   .user-menu{position:relative}
   .user-menu summary{list-style:none;display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:8px;cursor:pointer;color:#999;font-size:0.9rem;transition:background 0.15s;user-select:none}
   .user-menu summary::-webkit-details-marker{display:none}
-  .user-menu summary:hover{background:#1a1a1a;color:#fff}
-  .user-menu[open] summary{background:#1a1a1a;color:#fff}
+	  .user-menu summary:hover{background:#141419;color:#fff}
+	  .user-menu[open] summary{background:#141419;color:#fff}
   .user-menu img{border-radius:50%;display:block}
-  .user-menu-pop{position:absolute;top:calc(100% + 8px);right:0;background:#0a0a0a;border:1px solid #222;border-radius:10px;padding:6px;min-width:180px;box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:10;display:flex;flex-direction:column;gap:2px}
+	  .user-menu-pop{position:absolute;top:calc(100% + 8px);right:0;background:rgba(14,14,18,.96);border:1px solid #1e1e26;border-radius:12px;padding:6px;min-width:180px;box-shadow:0 18px 50px rgba(0,0,0,.55);backdrop-filter:blur(18px);z-index:10;display:flex;flex-direction:column;gap:2px}
   .user-menu-pop a{display:block;padding:8px 12px;border-radius:6px;color:#ccc;font-size:0.9rem;text-decoration:none;transition:background 0.1s}
-  .user-menu-pop a:hover{background:#1a1a1a;color:#fff}
-  .user-menu-pop hr{border:0;border-top:1px solid #222;margin:4px 6px}
-  h1{font-size:4.5rem;font-weight:800;letter-spacing:-0.05em;line-height:1;margin-bottom:24px;position:relative}
+	  .user-menu-pop a:hover{background:#141419;color:#fff}
+	  .user-menu-pop hr{border:0;border-top:1px solid #1e1e26;margin:4px 6px}
+	  .eyebrow{display:inline-flex;align-items:center;gap:8px;margin-bottom:22px;padding:7px 11px;border-radius:999px;border:1px solid rgba(124,92,255,.25);background:rgba(124,92,255,.08);color:#b8aaff;font-size:.72rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase}
+	  .eyebrow i{width:6px;height:6px;border-radius:50%;background:#22d3ee;box-shadow:0 0 12px #22d3ee}
+	  h1{max-width:760px;font-size:clamp(3.2rem,8vw,5.9rem);font-weight:800;letter-spacing:-.065em;line-height:.92;margin-bottom:30px;position:relative;z-index:1}
   /* H1 text: white→gray gradient etched into the glass. The "ship to"
      part is bright (lit by the highlight from upper-left), "the void"
      fades into the glass edge on the right. */
   h1 span{
-    background:linear-gradient(95deg, #fff 0%, #f0f0f0 30%, #888 75%, #555 100%);
+	    background:linear-gradient(100deg,#fff 0%,#e7e7ee 43%,#a695ff 72%,#66e5f5 100%);
     -webkit-background-clip:text;
     -webkit-text-fill-color:transparent;
     background-clip:text;
     /* Subtle inner glow so the text looks like it has light behind it */
     filter:drop-shadow(0 0 30px rgba(255,255,255,0.04));
   }
-  h1 .o{display:inline-block;font-size:1.05em;font-weight:200;vertical-align:-0.06em;margin:0 -0.04em;animation:o-spin 12s linear infinite}
-  @keyframes o-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-  .sub{font-size:1.25rem;color:#999;margin-bottom:32px;line-height:1.5}
-  .taglines{position:relative;height:3.4em;margin-bottom:12px;font-size:1.25rem;color:#999;line-height:1.5;overflow:hidden}
+	  h1 .o{display:inline-block;font-size:1.05em;font-weight:200;vertical-align:-.06em;margin:0 -.04em;color:#b8aaff;-webkit-text-fill-color:initial;filter:drop-shadow(0 0 18px rgba(124,92,255,.5));animation:o-spin 8s linear infinite,o-pulse 2.8s ease-in-out infinite}
+	  @keyframes o-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+	  @keyframes o-pulse{0%,100%{filter:drop-shadow(0 0 10px rgba(124,92,255,.35))}50%{filter:drop-shadow(0 0 24px rgba(34,211,238,.65))}}
+	  .taglines{position:relative;height:3.4em;max-width:670px;margin-bottom:14px;font-size:1.18rem;color:#9d9daa;line-height:1.55;overflow:hidden}
   .tagline{position:absolute;top:0;left:0;right:0;opacity:0;transform:translateY(10px);animation:tagline-cycle 20s linear infinite}
   .tagline.t1{animation-delay:0s}.tagline.t2{animation-delay:5s}.tagline.t3{animation-delay:10s}.tagline.t4{animation-delay:15s}
   @keyframes tagline-cycle{0%{opacity:0;transform:translateY(10px)}3%{opacity:1;transform:translateY(0)}22%{opacity:1;transform:translateY(0)}27%{opacity:0;transform:translateY(-10px)}100%{opacity:0;transform:translateY(-10px)}}
   .tagline-dots{display:flex;gap:6px;margin-bottom:32px}
-  .tagline-dots .dot{width:5px;height:5px;border-radius:50%;background:#333;transition:background 0.3s}
-  .tagline-dots .dot.active{background:#fff}
+	  .tagline-dots .dot{width:5px;height:5px;border-radius:50%;background:#292934;transition:background .3s}
+	  .tagline-dots .dot.active{background:#7c5cff}
   .tagline-dots .dot:nth-child(1){animation:dot-cycle 20s linear infinite;animation-delay:0s}
   .tagline-dots .dot:nth-child(2){animation:dot-cycle 20s linear infinite;animation-delay:5s}
   .tagline-dots .dot:nth-child(3){animation:dot-cycle 20s linear infinite;animation-delay:10s}
   .tagline-dots .dot:nth-child(4){animation:dot-cycle 20s linear infinite;animation-delay:15s}
-  @keyframes dot-cycle{0%{background:#333}3%{background:#fff}27%{background:#fff}30%{background:#333}100%{background:#333}}
+	  @keyframes dot-cycle{0%{background:#292934}3%{background:#7c5cff}27%{background:#22d3ee}30%{background:#292934}100%{background:#292934}}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:32px}
   .card{background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:20px;transition:border-color 0.2s}
   .card:hover{border-color:#444}
   .card h3{font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:#888;margin-bottom:8px}
   .card .val{font-size:1.75rem;font-weight:700;line-height:1}
   .card .sub2{font-size:0.85rem;color:#666;margin-top:4px}
-  .actions{display:flex;gap:12px;margin-bottom:32px;flex-wrap:wrap}
-  .btn{display:inline-flex;align-items:center;gap:10px;padding:12px 22px;border-radius:10px;font-size:1rem;font-weight:600;text-decoration:none;border:1px solid transparent;transition:all 0.2s;cursor:pointer;white-space:nowrap;flex-shrink:0}
+	  .actions{display:flex;gap:12px;margin-bottom:26px;flex-wrap:wrap;position:relative;z-index:1}
+	  .btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:13px 22px;border-radius:11px;font-size:.95rem;font-weight:650;text-decoration:none;border:1px solid transparent;transition:all .2s;cursor:pointer;white-space:nowrap;flex-shrink:0}
   .btn svg{width:18px;height:18px;flex-shrink:0}
-  /* Primary CTA — matches the H1 gradient (etched-glass look) */
-  .btn-primary{
-    color:#000;
-    background:linear-gradient(95deg, #fff 0%, #f0f0f0 50%, #e0e0e0 100%);
-    border:1px solid rgba(255,255,255,0.3);
-    box-shadow:
-      0 1px 0 rgba(255,255,255,0.4) inset,
-      0 8px 24px rgba(255,255,255,0.06),
-      0 0 40px rgba(255,255,255,0.04);
+	  .btn-primary{
+	    color:#fff;
+	    background:linear-gradient(110deg,#7656f4,#7c5cff 55%,#4b8bd9);
+	    border:1px solid rgba(255,255,255,.14);
+	    box-shadow:
+	      0 1px 0 rgba(255,255,255,.25) inset,
+	      0 12px 30px rgba(124,92,255,.28),
+	      0 0 40px rgba(124,92,255,.13);
     position:relative;
     overflow:hidden;
   }
   .btn-primary:hover{
     transform:translateY(-1px);
     box-shadow:
-      0 1px 0 rgba(255,255,255,0.5) inset,
-      0 12px 32px rgba(255,255,255,0.1),
-      0 0 60px rgba(255,255,255,0.06);
+	      0 1px 0 rgba(255,255,255,.32) inset,
+	      0 16px 38px rgba(124,92,255,.38),
+	      0 0 56px rgba(34,211,238,.12);
   }
   .btn-primary:active{transform:translateY(0)}
   /* The 'shine' that sweeps across on hover — gives a glassy premium feel */
@@ -629,8 +609,11 @@ export function renderLandingHtml(opts: {
   }
   .btn-primary:hover::after{left:120%}
   .btn-primary svg{width:18px;height:18px}
-  .btn-secondary{background:rgba(255,255,255,0.04);color:#fff;border:1px solid rgba(255,255,255,0.08);backdrop-filter:blur(8px)}
-  .btn-secondary:hover{background:rgba(255,255,255,0.08);border-color:rgba(255,255,255,0.15)}
+	  .btn-secondary{background:rgba(255,255,255,.045);color:#e7e7ee;border:1px solid rgba(255,255,255,.09);backdrop-filter:blur(12px)}
+	  .btn-secondary:hover{background:rgba(255,255,255,.08);border-color:rgba(124,92,255,.35);transform:translateY(-1px)}
+	  .proof{display:flex;align-items:center;gap:9px;flex-wrap:wrap;color:#777784;font-size:.78rem;position:relative;z-index:1}
+	  .proof span{display:inline-flex;align-items:center;gap:7px}.proof span::before{content:"";width:4px;height:4px;border-radius:50%;background:#42424f}.proof span:first-child::before{background:#22d3ee;box-shadow:0 0 9px rgba(34,211,238,.8)}
+	  @media(max-width:680px){body{padding:12px}.wrap{padding:54px 24px 36px;border-radius:22px}.top-right{top:14px;right:16px}.taglines{font-size:1rem;height:4.7em}.actions{flex-direction:column}.btn{width:100%}.proof{line-height:1.8}}
   .features{background:#0a0a0a;border:1px solid #222;border-radius:12px;padding:20px;margin-bottom:24px}
   .features h3{font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:#888;margin-bottom:12px}
   .features ul{list-style:none}
@@ -656,12 +639,13 @@ export function renderLandingHtml(opts: {
 <body>
 <div class="wrap">
   ${topRight}
+  <div class="eyebrow"><i></i> infrastructure, composed</div>
   <h1>ship to the <span class="o">∅</span> void</h1>
   <div class="taglines" aria-live="polite">
-    <span class="tagline t1">Self-hosted, edge-driven PaaS. Best-in-class DX, Hetzner pricing, no SSH. AI-deploys via MCP.</span>
-    <span class="tagline t2">your AI writes the code. void ships it.</span>
-    <span class="tagline t3">Hetzner bill. Premium DX. Zero SSH. Live in 60 seconds.</span>
-    <span class="tagline t4">the only PaaS that runs on your own VMs. you own it all.</span>
+    <span class="tagline t1">One calm control plane for your code, compute, and domains.</span>
+    <span class="tagline t2">Push a repository. Provision your server. Ship without touching SSH.</span>
+    <span class="tagline t3">Your providers. Your infrastructure. A deploy flow that stays beautifully simple.</span>
+    <span class="tagline t4">Built for humans, agents, and everything shipping between them.</span>
   </div>
   <div class="tagline-dots" aria-hidden="true">
     <span class="dot active"></span>
@@ -672,12 +656,10 @@ export function renderLandingHtml(opts: {
 
   <div class="actions">
     ${opts.user ? `
-      <a href="/servers" class="btn btn-secondary">Servers</a>
-      <a href="/projects" class="btn btn-secondary">Projects</a>
-      <a href="/deployments" class="btn btn-secondary">Deployments</a>
-      <a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">${octocat}New Server</a>
+      <a href="/projects" class="btn btn-primary">Open projects</a>
+      <a href="/settings" class="btn btn-secondary">Account settings</a>
     ` : `
-      <a href="/api/auth/github?returnTo=%2Fservers" class="btn btn-primary">${octocat}Continue with GitHub</a>
+      <a href="/api/auth/github?returnTo=%2Fprojects" class="btn btn-primary">${octocat}Continue with GitHub</a>
       <button type="button" id="passkey-btn" class="btn btn-secondary" onclick="loginWithPasskey()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true">
           <path d="M12 2c-2.5 0-4.5 2-4.5 4.5v3c0 1 .5 2 1.5 2.5"/>
@@ -692,38 +674,8 @@ export function renderLandingHtml(opts: {
       ${opts.devAuthButtonMarker ?? ""}
     `}
   </div>
-  <small id="passkey-status" style="display:block;margin:-16px 0 32px;font-size:0.85rem;min-height:1.2em;color:#888"></small>
-
-  <div id="panel"></div>
-
-  ${oauthBanner}
-
-  <div class="features">
-    <h3>Configuration status</h3>
-    <ul>${featuresHtml}</ul>
-  </div>
-
-  <div class="endpoints">
-    <h3>MCP tools (for your AI)</h3>
-    <code><span class="method post">POST</span>/mcp — MCP Streamable HTTP endpoint</code>
-    <code>tools: void_list_servers, void_create_server, void_deploy, void_get_logs, void_teardown, void_register_project, void_ping_agent</code>
-  </div>
-
-  <div class="endpoints" style="margin-top:16px">
-    <h3>Connect your AI — paste into Claude Desktop / Cursor / Cline</h3>
-    <code>{
-  "mcpServers": {
-    "void": {
-      "url": "https://void.retraut.workers.dev/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_BEARER_TOKEN"
-      }
-    }
-  }
-}</code>
-    <p style="color:#666;font-size:0.8rem;margin-top:8px">Set <code>VOID_BEARER_TOKEN</code> via <code>wrangler secret put VOID_BEARER_TOKEN</code> (use <code>openssl rand -hex 32</code>). Restart your AI client to load the MCP server.</p>
-  </div>
-  </div>
+  <small id="passkey-status" style="display:block;margin:-12px 0 22px;font-size:.85rem;min-height:1.2em;color:#8b8b99"></small>
+  <div class="proof"><span>Project-scoped by design</span><span>GitHub</span><span>Hetzner</span><span>Cloudflare</span></div>
 </div>
 <!-- Passkey login JS — uses the browser lib from jsdelivr's +esm
      endpoint. Same flow as registration but in reverse: get options,

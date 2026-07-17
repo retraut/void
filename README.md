@@ -31,24 +31,28 @@ pnpm --filter @void/worker dev
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
-│  AI Assistant   │     │  Control Plane        │     │  Your VM              │
-│  (Cursor/Claude)│────▶│  Cloudflare Workers   │────▶│  Hetzner/DO VPS       │
-│                 │     │  + Hono + D1          │     │  Rust agent           │
-│                 │     │  + KV + R2            │     │  + Docker             │
-└─────────────────┘     │  + Durable Objects    │     │  + Railpack builds    │
-                        │  + MCP server         │     │  + cloudflared tunnel │
-                        └──────────────────────┘     └──────────────────────┘
+┌─────────────────┐     ┌────────────────────────┐     ┌──────────────────────┐
+│ Browser / MCP / │────▶│ Cloudflare Worker      │────▶│ User-owned VM        │
+│ GitHub webhook  │     │ Hono + D1 + KV         │ WS  │ Rust agent           │
+└─────────────────┘     │ + per-server VoidCell  │     │ thin step executor   │
+                        └────────────────────────┘     └──────────┬───────────┘
+                                                               │ local port
+User request ─────────▶ Cloudflare edge ─────▶ tunnel ──────────┘
 ```
 
-- **Control plane** runs on Cloudflare Workers (free tier up to ~1000 active users)
-- **Agent** is a Rust binary (~8MB RAM) running on your VPS
-- **App traffic** flows User → CF edge → cloudflared tunnel → Docker container (no Worker in data path)
+- **Control plane** owns authentication, product state, orchestration, and routing configuration
+- **VoidCell** owns the ephemeral connection, recent metrics, and log fan-out for one server
+- **Agent** is a Rust binary that validates and executes ordered steps on your VPS
+- **App traffic** flows User → CF edge → cloudflared tunnel → application process (no Worker in data path)
 - **Worker is not in app data path** — if Worker goes down, deployed apps keep serving
+
+See [Current architecture](docs/ARCHITECTURE.md) for component ownership,
+state boundaries, failure modes, and known gaps.
 
 ## Status
 
-🚧 **v0.1 in development.** See [SPEC.md](docs/SPEC.md) for the full technical specification.
+🚧 **v0.1 in development.** See the [documentation map](docs/README.md) and
+[current architecture](docs/ARCHITECTURE.md) for implementation-oriented docs.
 
 Current focus: GitHub App auto-deploy, MCP server, first-run wizard, cloudflared tunnel setup.
 
@@ -58,6 +62,9 @@ MIT — see [LICENSE](LICENSE).
 
 ## Links
 
-- [Full spec](docs/SPEC.md)
+- [Documentation map](docs/README.md)
+- [Current architecture](docs/ARCHITECTURE.md)
+- [Historical product/target spec](docs/SPEC.md)
+- [Agent protocol](docs/PROTOCOL.md)
 - [Why void exists](docs/SPEC.md#why-void-exists)
 - [v0.1 launch criteria](docs/SPEC.md#mvp-scope-v01--launch-ready)

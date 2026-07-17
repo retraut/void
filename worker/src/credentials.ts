@@ -2,14 +2,14 @@
  * void Worker — per-user provider credentials
  *
  * Stores encrypted API tokens (Hetzner, etc.) in D1, one row per
- * (user_id, provider). Tokens encrypted with AES-256-GCM using
+ * (project_id, provider). Tokens encrypted with AES-256-GCM using
  * ENCRYPTION_KEY (or legacy COOKIE_SECRET).
  */
 
 import type { Env } from "./env";
 import { encrypt, decrypt } from "./crypto";
 
-export type Provider = "hetzner";
+export type Provider = "hetzner" | "cloudflare";
 
 /**
  * Look up a user's token for a provider. Returns the decrypted token
@@ -21,12 +21,13 @@ export async function getProviderToken(
 	env: Env,
 	userId: string,
 	provider: Provider,
+	projectId: string,
 ): Promise<string | null> {
 	const row = await env.void_db
 		.prepare(
-			"SELECT encrypted_token FROM provider_credentials WHERE user_id = ? AND provider = ?",
+			"SELECT encrypted_token FROM provider_credentials WHERE user_id = ? AND project_id = ? AND provider = ?",
 		)
-		.bind(userId, provider)
+		.bind(userId, projectId, provider)
 		.first<{ encrypted_token: string }>();
 
 	if (row) {
@@ -37,7 +38,32 @@ export async function getProviderToken(
 
 	// Fallback to env (for self-hosted single-tenant deployments).
 	if (provider === "hetzner" && env.HETZNER_TOKEN) return env.HETZNER_TOKEN;
+	if (provider === "cloudflare" && env.CF_API_TOKEN) return env.CF_API_TOKEN;
 	return null;
+}
+
+export async function verifyCloudflareToken(
+	token: string,
+): Promise<{ ok: boolean; reason?: string; zones?: number }> {
+	try {
+		const verify = await fetch("https://api.cloudflare.com/client/v4/user/tokens/verify", {
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		const verification = await verify.json() as { success?: boolean; errors?: Array<{ message: string }> };
+		if (!verify.ok || !verification.success) {
+			return { ok: false, reason: verification.errors?.map((error) => error.message).join(", ") || "Cloudflare rejected the token" };
+		}
+		const zonesResponse = await fetch("https://api.cloudflare.com/client/v4/zones?per_page=50", {
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		const zones = await zonesResponse.json() as { success?: boolean; result?: Array<unknown>; errors?: Array<{ message: string }> };
+		if (!zonesResponse.ok || !zones.success) {
+			return { ok: false, reason: zones.errors?.map((error) => error.message).join(", ") || "Token cannot read Cloudflare zones" };
+		}
+		return { ok: true, zones: zones.result?.length ?? 0 };
+	} catch (error) {
+		return { ok: false, reason: `Network error contacting Cloudflare: ${(error as Error).message}` };
+	}
 }
 
 /**
@@ -77,7 +103,9 @@ export async function setProviderToken(
 	userId: string,
 	provider: Provider,
 	token: string,
+	projectId: string,
 	verifiedDatacenters?: number,
+	metadata?: Record<string, unknown>,
 ): Promise<void> {
 	const key = env.ENCRYPTION_KEY || env.COOKIE_SECRET;
 	if (!key) throw new Error("ENCRYPTION_KEY (or COOKIE_SECRET) not configured");
@@ -86,14 +114,16 @@ export async function setProviderToken(
 	const now = Math.floor(Date.now() / 1000);
 	await env.void_db
 		.prepare(
-			`INSERT INTO provider_credentials (id, user_id, provider, encrypted_token, verified_datacenters, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(user_id, provider) DO UPDATE SET
+			`INSERT INTO provider_credentials (id, user_id, project_id, provider, encrypted_token, verified_datacenters, metadata_json, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(project_id, provider) DO UPDATE SET
+			   user_id = excluded.user_id,
 			   encrypted_token = excluded.encrypted_token,
 			   verified_datacenters = excluded.verified_datacenters,
+			   metadata_json = excluded.metadata_json,
 			   created_at      = excluded.created_at`,
 		)
-		.bind(id, userId, provider, encrypted, verifiedDatacenters ?? null, now)
+		.bind(id, userId, projectId, provider, encrypted, verifiedDatacenters ?? null, metadata ? JSON.stringify(metadata) : null, now)
 		.run();
 }
 
@@ -104,10 +134,11 @@ export async function deleteProviderToken(
 	env: Env,
 	userId: string,
 	provider: Provider,
+	projectId: string,
 ): Promise<void> {
 	await env.void_db
-		.prepare("DELETE FROM provider_credentials WHERE user_id = ? AND provider = ?")
-		.bind(userId, provider)
+		.prepare("DELETE FROM provider_credentials WHERE user_id = ? AND project_id = ? AND provider = ?")
+		.bind(userId, projectId, provider)
 		.run();
 }
 
@@ -117,12 +148,13 @@ export async function deleteProviderToken(
 export async function listProviderCredentials(
 	env: Env,
 	userId: string,
+	projectId: string,
 ): Promise<Array<{ provider: Provider; created_at: number; verified_datacenters: number | null }>> {
 	const rows = await env.void_db
 		.prepare(
-			"SELECT provider, created_at, verified_datacenters FROM provider_credentials WHERE user_id = ? ORDER BY created_at DESC",
+			"SELECT provider, created_at, verified_datacenters FROM provider_credentials WHERE user_id = ? AND project_id = ? ORDER BY created_at DESC",
 		)
-		.bind(userId)
+		.bind(userId, projectId)
 		.all<{ provider: string; created_at: number; verified_datacenters: number | null }>();
 	return rows.results.map((r) => ({
 		provider: r.provider as Provider,

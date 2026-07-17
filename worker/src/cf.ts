@@ -25,8 +25,16 @@ export interface DnsRecordInfo {
 	content: string;
 }
 
+export interface ZoneInfo {
+	id: string;
+	name: string;
+	status: string;
+	paused: boolean;
+	name_servers: string[];
+}
+
 export interface IngressRule {
-	hostname: string;
+	hostname?: string;
 	service: string;
 	originRequest?: Record<string, unknown>;
 }
@@ -92,7 +100,7 @@ export async function getTunnelConfig(
 	return cfFetch<{ config: { ingress: IngressRule[] } }>(
 		`/accounts/${accountId}/cfd_tunnel/${tunnelId}/configurations`,
 		{ token, method: "GET" },
-	).then((r) => ({ ingress: r.ingress || [] }));
+	).then((r) => ({ ingress: r.config?.ingress || [] }));
 }
 
 /**
@@ -167,6 +175,13 @@ export async function deleteTunnel(
 }
 
 // ---------- DNS ----------
+
+export async function listZones(token: string): Promise<ZoneInfo[]> {
+	return await cfFetch<ZoneInfo[]>("/zones?per_page=50&order=name&direction=asc", {
+		token,
+		method: "GET",
+	});
+}
 
 /**
  * Create a CNAME record pointing hostname → <tunnel_id>.cfargotunnel.com

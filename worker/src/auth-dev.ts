@@ -36,10 +36,11 @@ export async function handleDevLogin(c: Context): Promise<Response> {
 	if (!username) {
 		return c.json({ error: "invalid_username" }, 400);
 	}
-	// Idempotent: upsert the user. github_id is synthetic (starts
-	// with "dev_") so it can never collide with a real GitHub
-	// user's id.
-	const userId = `usr_dev_${username}`;
+	// The test-lab provisions `usr_lab` before starting the VM. Keep
+	// the dev-login session on that same user so the UI sees the VM's
+	// Project instead of creating a second empty dev user.
+	// Other dev usernames remain isolated synthetic users.
+	const userId = username === "lab" ? "usr_lab" : `usr_dev_${username}`;
 	const now = Math.floor(Date.now() / 1000);
 	await c.env.void_db
 		.prepare(
@@ -85,4 +86,3 @@ ${DEV_AUTH_BUTTON_MARKER}
 // Re-export so dev-entry can read the same cookie name when it
 // wants to clear it on dev-logout.
 export { SESSION_COOKIE_NAME_DEV };
-

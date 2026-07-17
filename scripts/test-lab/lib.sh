@@ -93,8 +93,12 @@ wrangler_start() {
 	(
 		cd "$LAB_REPO_ROOT/worker"
 		# nohup so the dev process survives us exiting
-		nohup wrangler dev --config wrangler.dev.jsonc --port "$LAB_AGENT_PORT" --ip 0.0.0.0 \
-			> "$LAB_LOG" 2>&1 &
+		# Detach from the caller's process group as well as its HUP
+		# signal. Codex/CI shells clean up descendants when they exit;
+		# a new session keeps the long-lived local worker alive for the VM.
+		nohup perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' -- \
+			wrangler dev --config wrangler.dev.jsonc --port "$LAB_AGENT_PORT" --ip 0.0.0.0 \
+			< /dev/null > "$LAB_LOG" 2>&1 &
 		echo $! > "$LAB_PID"
 	)
 	# wait for /health

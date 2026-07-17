@@ -1,5 +1,13 @@
 # void — Technical Specification v0.1
 
+> **Status: Historical target-design archive.** This document mixes product
+> requirements, superseded architecture, future design, and historical rationale.
+> Completion marks and implementation claims have not been re-audited and must
+> not be treated as current state. Start with
+> [ARCHITECTURE.md](ARCHITECTURE.md) and use [PROTOCOL.md](PROTOCOL.md) for the
+> normative agent wire contract. The documentation taxonomy and precedence rules
+> are in [README.md](README.md).
+
 **Tagline:** Best-in-class DX. Hetzner pricing. No SSH.
 **Longer pitch:** Your AI deploys. You don't SSH. You pay €4/mo to Hetzner, not $20/mo to a managed PaaS.
 
@@ -1432,9 +1440,6 @@ See MVP Scope above. Git push auto-deploy + preview URLs + MCP + edge control pl
 - [ ] DO hibernation for log retention (cheaper than current approach)
 - [ ] Per-user KV rate limiting refinement
 - [ ] **Edge functions via Workers for Platforms** (see below) — parity with Vercel Edge, big differentiator vs Coolify
-
-### v0.4 — Production (target: 4-6 months)
-- [ ] Managed Postgres/Redis addons (Turbocharge or Supabase)
 
 ### v0.4 — Production (target: 4-6 months)
 - [ ] Managed Postgres/Redis addons (Turbocharge or Supabase)

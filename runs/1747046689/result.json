@@ -1,0 +1,52 @@
+{
+  "drift": [
+    {
+      "type": "field_in_code_not_in_doc",
+      "frame": "heartbeat",
+      "field": "metrics",
+      "detail": "PROTOCOL.md heartbeat example shows only {type, timestamp}, but both code sides define optional 'metrics' field (Metrics struct/MetricsSchema). Doc does not mention metrics in text or JSON.",
+      "sources": ["agent/src/protocol.rs:47", "worker/src/protocol.ts:75", "docs/PROTOCOL.md:47"]
+    },
+    {
+      "type": "frame_missing_in_doc",
+      "frame": "token_rotation",
+      "detail": "TokenRotation frame exists in both agent/src/protocol.rs (WorkerToAgent::TokenRotation) and worker/src/protocol.ts (TokenRotationFrameSchema) but is completely absent from docs/PROTOCOL.md.",
+      "sources": ["agent/src/protocol.rs:153-162", "worker/src/protocol.ts:157-166"]
+    }
+  ],
+  "frame_matches": {
+    "agent_to_worker": {
+      "register": "match",
+      "heartbeat": "match",
+      "log": "match",
+      "deploy_done": "match",
+      "ready": "match"
+    },
+    "worker_to_agent": {
+      "registered": "match",
+      "ping": "match",
+      "shutdown": "match",
+      "pipeline": "match",
+      "error": "match",
+      "token_rotation": "match"
+    }
+  },
+  "enum_matches": {
+    "LogStream": { "rust": ["Stdout","Stderr"], "ts": ["stdout","stderr"], "status": "match" },
+    "DeployStatus": { "rust": ["Success","Failed"], "ts": ["success","failed"], "status": "match" },
+    "PressureTier": { "rust": ["Light","Medium","High","ExtraHigh"], "ts": ["light","medium","high","extra-high"], "status": "match" }
+  },
+  "code_sync": {
+    "all_frame_names_match": true,
+    "all_fields_match": true,
+    "all_enums_match": true
+  },
+  "doc_coverage": {
+    "frames_documented": ["register","heartbeat","log","deploy_done","ready","registered","ping","pipeline","shutdown","error"],
+    "frames_missing": ["token_rotation"],
+    "fields_missing": ["heartbeat.metrics"]
+  },
+  "protocol_hash": "c60489f28f2391f3bfab44ea7420c27b5a17265f5dcc8ec4fc8f5fa2649261d9",
+  "last_checked": $(date +%s),
+  "doc_outdated": true
+}

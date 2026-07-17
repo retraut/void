@@ -1,5 +1,10 @@
 # Security Audit — void
 
+> **Status: Point-in-time audit and remediation backlog.** This is not a complete
+> statement of the current security architecture. For trust boundaries and
+> current ownership, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Verify
+> every finding against the referenced code before treating its status as current.
+
 Date: 2026-06-25  
 Rev: 5ba0a5d (Security sprint: address all CRITICAL + HIGH findings from SECURITY.md)  
 Scope: agent + worker (Rust / TypeScript)

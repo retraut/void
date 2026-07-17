@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "void agent — runs on user VMs, talks to control plane over WebSocket"
 
+[features]
+default = []
+# Compatibility feature used by CI. Deployment policy remains in Worker-issued
+# pipeline steps; enabling this feature does not embed Docker orchestration.
+docker = []
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots", "url"] }

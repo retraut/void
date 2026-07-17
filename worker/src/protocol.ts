@@ -77,6 +77,9 @@ export const MetricsSchema = z
 		cpu_percent: z.number().min(0).max(100),
 		memory_mb: z.number().nonnegative(),
 		memory_percent: z.number().min(0).max(100),
+		load_avg: z.tuple([z.number(), z.number(), z.number()]).optional(),
+		cpu_count: z.number().int().positive().optional(),
+		pressure_tier: z.enum(["light", "medium", "high", "extra-high"]).optional(),
 	})
 	.strict();
 
@@ -87,6 +90,14 @@ export const HeartbeatFrameSchema = z
 		type: z.literal("heartbeat"),
 		timestamp: TimestampSchema,
 		metrics: MetricsSchema.optional(),
+	})
+	.strict();
+
+/** Read-only server inventory collected by the agent after registration. */
+export const InventoryFrameSchema = z
+	.object({
+		type: z.literal("inventory"),
+		inventory: z.record(z.string(), z.unknown()),
 	})
 	.strict();
 
@@ -126,6 +137,7 @@ export const ReadyFrameSchema = z
 export const AgentOutFrameSchema = z.discriminatedUnion("type", [
 	RegisterFrameSchema,
 	HeartbeatFrameSchema,
+	InventoryFrameSchema,
 	LogFrameSchema,
 	DeployDoneFrameSchema,
 	ReadyFrameSchema,

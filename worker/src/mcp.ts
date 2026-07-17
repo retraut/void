@@ -8,18 +8,13 @@
 
 import { Env } from "./env";
 import {
-	createTunnel,
-	createDnsCname,
-	upsertIngressRule,
 	removeIngressRule,
 	findDnsRecord,
 	deleteDnsRecord,
 } from "./cf";
 import { getServer as hetznerGetServer, deleteServer as hetznerDeleteServer } from "./hetzner";
 import { createServerForUser } from "./server-create";
-import { validateRef, validateRepoUrl, validateShellCommand } from "./security";
 import { getProviderToken } from "./credentials";
-import { encrypt, decrypt } from "./crypto";
 
 interface JsonRpcRequest {
 	jsonrpc: "2.0";
@@ -60,20 +55,17 @@ const TOOLS = [
 	{
 		name: "void_deploy",
 		description:
-			"Trigger a deployment. Pass `project_id` (from a previously registered project) for one-call deploys — server, repo, ref, build, and serve commands are all auto-resolved from the project. Alternatively, pass `server_id` + `repo_url` directly for ad-hoc deploys. The agent clones the repo, runs the build, starts the serve, and (if cloudflared + CF_API_TOKEN are set) makes the app publicly accessible via a wildcard tunnel + DNS record.",
+			"Deploy a repository to a server. Both must belong to the same Project aggregate.",
 		inputSchema: {
 			type: "object",
 			properties: {
-				project_id: { type: "string", description: "Project ID (from void_register_project). If set, server_id/repo_url/ref/build_command/serve_command/port are all auto-resolved from the project. RECOMMENDED." },
-				server_id: { type: "string", description: "Target server (from void_list_servers). Required if project_id not set." },
-				repo_url: { type: "string", description: "Git URL, e.g. 'https://github.com/owner/repo'. Required if project_id not set." },
-				ref: { type: "string", description: "Branch / tag / commit SHA. Default: project's default_branch or 'main'.", default: "main" },
+				repository_id: { type: "string", description: "Repository ID from the Project." },
+				server_id: { type: "string", description: "Target server in the same Project." },
+				ref: { type: "string", description: "Branch / tag / commit SHA. Defaults to repository default branch." },
 				env: { type: "object", description: "Env vars as key-value", additionalProperties: { type: "string" } },
-				build_command: { type: "string", description: "Override project's build_command. Default: project value or skip." },
-				serve_command: { type: "string", description: "Override project's serve_command. Default: project value or skip." },
-				port: { type: "integer", description: "Override project's port. Default: 3000.", default: 3000 },
 				hostname: { type: "string", description: "Custom public hostname (without zone). Default: auto-generated from deployment_id." },
 			},
+			required: ["repository_id", "server_id"],
 		},
 	},
 	{
@@ -112,23 +104,9 @@ const TOOLS = [
 		},
 	},
 	{
-		name: "void_register_project",
-		description:
-			"Register a project for git push auto-deploy. Once registered, configure a GitHub webhook on the repo pointing to POST /api/webhooks/github with a secret matching GITHUB_WEBHOOK_SECRET. Pushes to the default branch → production deploy; PRs → preview URL.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				server_id: { type: "string", description: "Server to deploy to" },
-				slug: { type: "string", description: "URL-safe project slug, e.g. 'my-app'" },
-				name: { type: "string", description: "Display name" },
-				repo_url: { type: "string", description: "Git URL, e.g. 'https://github.com/owner/repo'" },
-				default_branch: { type: "string", description: "Default branch (main/master)", default: "main" },
-				default_port: { type: "integer", description: "Port the serve_command listens on", default: 3000 },
-				build_command: { type: "string", description: "Build command (optional)" },
-				serve_command: { type: "string", description: "Serve command (optional)" },
-			},
-			required: ["server_id", "slug", "name", "repo_url"],
-		},
+		name: "void_list_projects",
+		description: "List Project aggregates with their GitHub connection, repositories, and servers.",
+		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 	},
 ];
 
@@ -141,7 +119,7 @@ function rpcErr(id: JsonRpcRequest["id"], code: number, message: string, data?: 
 
 export async function handleMcp(c: any): Promise<Response> {
 	const request = c.req.raw;
-	const env = c.env;
+	const env = c.env as Env;
 	if (request.method !== "POST") {
 		return new Response("MCP requires POST", { status: 405 });
 	}
@@ -245,276 +223,42 @@ export async function handleMcp(c: any): Promise<Response> {
 				}
 
 				case "void_deploy": {
-					const projectId = args.project_id as string | undefined;
-					const deploymentId = `dep_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-
-					// Resolve effective deploy params: project_id takes precedence, but
-					// explicit args override the project defaults.
-					let serverId = args.server_id as string | undefined;
-					let repoUrl = args.repo_url as string | undefined;
-					let ref = (args.ref as string) || "main";
-					let buildCommand = args.build_command as string | undefined;
-					let serveCommand = args.serve_command as string | undefined;
-					let port = (args.port as number) || 3000;
-					let projectSlug: string | null = null;
-
-					if (projectId) {
-						const project = await env.void_db
-							.prepare(
-								"SELECT id, slug, server_id, repo_url, default_branch, default_port, build_command, serve_command FROM projects WHERE id = ?",
-							)
-							.bind(projectId)
-							.first<{
-								id: string;
-								slug: string;
-								server_id: string;
-								repo_url: string;
-								default_branch: string;
-								default_port: number;
-								build_command: string | null;
-								serve_command: string | null;
-							}>();
-						if (!project) {
-							return Response.json(
-								rpcErr(
-									id,
-									-32000,
-									`Project ${projectId} not found. Use void_list_servers → projects to see registered projects.`,
-								)
-							);
-						}
-						serverId = serverId || project.server_id;
-						repoUrl = repoUrl || project.repo_url;
-						ref = (args.ref as string) || project.default_branch;
-						port = (args.port as number) || project.default_port;
-						buildCommand = buildCommand || (project.build_command ?? undefined);
-						serveCommand = serveCommand || (project.serve_command ?? undefined);
-						projectSlug = project.slug;
-					}
-
-					if (!serverId) {
-						return Response.json(
-							rpcErr(id, -32004, "Missing server_id. Pass either `project_id` or `server_id`."),
-						);
-					}
-					if (!repoUrl) {
-						return Response.json(
-							rpcErr(id, -32002, "Missing repo_url. Pass either `project_id` or `repo_url`."),
-						);
-					}
-
-					// Validate inputs (defense in depth)
-					const refCheck = validateRef(ref);
-					if (!refCheck.ok) {
-						return Response.json(rpcErr(id, -32001, `invalid ref: ${refCheck.reason}`));
-					}
-					const urlCheck = validateRepoUrl(repoUrl);
-					if (!urlCheck.ok) {
-						return Response.json(rpcErr(id, -32002, `invalid repo_url: ${urlCheck.reason}`));
-					}
-					if (buildCommand) {
-						const c = validateShellCommand(buildCommand, "build_command");
-						if (!c.ok) return Response.json(rpcErr(id, -32003, `build_command: ${c.reason}`));
-					}
-					if (serveCommand) {
-						const c = validateShellCommand(serveCommand, "serve_command");
-						if (!c.ok) return Response.json(rpcErr(id, -32003, `serve_command: ${c.reason}`));
-					}
-
-					// Check server exists
+					const repositoryId = String(args.repository_id || "");
+					const serverId = String(args.server_id || "");
+					const repository = await env.void_db
+						.prepare(
+							"SELECT id, project_id, clone_url, default_branch, default_port, build_command, serve_command FROM repositories WHERE id = ?",
+						)
+						.bind(repositoryId)
+						.first<any>();
 					const server = await env.void_db
-						.prepare(
-							"SELECT id, status, tunnel_id, tunnel_token_encrypted, tunnel_name FROM servers WHERE id = ?",
-						)
+						.prepare("SELECT id, project_id, status FROM servers WHERE id = ?")
 						.bind(serverId)
-						.first<{
-							id: string;
-							status: string;
-							tunnel_id: string | null;
-							tunnel_token_encrypted: string | null;
-							tunnel_name: string | null;
-						}>();
-					if (!server) {
-						return Response.json(
-							rpcErr(
-								id,
-								-32004,
-								`Server ${serverId} not found. Use void_list_servers to see available servers.`,
-							)
-						);
+						.first<any>();
+					if (!repository) return Response.json(rpcErr(id, -32000, "repository not found"));
+					if (!server) return Response.json(rpcErr(id, -32004, "server not found"));
+					if (repository.project_id !== server.project_id) {
+						return Response.json(rpcErr(id, -32009, "repository and server must belong to the same project"));
 					}
-
-					// Cloudflare tunnel + DNS setup (if configured)
-					let hostname: string | null = null;
-					let publicUrl: string | null = null;
-					let dnsRecordId: string | null = null;
-					let tunnelToken: string | null = null;
-					let tunnelId = server.tunnel_id;
-
-					if (env.CF_API_TOKEN && env.CF_ACCOUNT_ID && env.CF_ZONE_ID) {
-						// 1. Create tunnel on first use
-						if (!tunnelId) {
-							try {
-								const tunnel = await createTunnel(
-									env.CF_API_TOKEN,
-									env.CF_ACCOUNT_ID,
-									`void-${serverId}`,
-								);
-								tunnelId = tunnel.id;
-								tunnelToken = tunnel.token;
-								// Encrypt tunnel_token before storing in D1
-								const encryptKey = env.ENCRYPTION_KEY || env.COOKIE_SECRET;
-								const encrypted = encryptKey
-									? await encrypt(encryptKey, tunnel.token)
-									: null;
-								await env.void_db
-									.prepare(
-										"UPDATE servers SET tunnel_id = ?, tunnel_name = ?, tunnel_token_encrypted = ? WHERE id = ?",
-									)
-									.bind(tunnelId, tunnel.name, encrypted, serverId)
-									.run();
-							} catch (e: any) {
-								return Response.json(
-									rpcErr(
-										id,
-										-32005,
-										`Failed to create CF tunnel: ${e?.message || e}. Check CF_API_TOKEN / CF_ACCOUNT_ID.`,
-									)
-								);
-							}
-						} else {
-							// Tunnel exists — decrypt stored token
-							if (server.tunnel_token_encrypted && (env.ENCRYPTION_KEY || env.COOKIE_SECRET)) {
-								tunnelToken = await decrypt(env.ENCRYPTION_KEY || env.COOKIE_SECRET!, server.tunnel_token_encrypted);
-							}
-						}
-
-						// 2. Compute hostname
-						hostname = (args.hostname as string) || `pr-${deploymentId}`;
-						try {
-							await upsertIngressRule(
-								env.CF_API_TOKEN,
-								env.CF_ACCOUNT_ID,
-								tunnelId!,
-								hostname,
-								`http://localhost:${port}`,
-							);
-						} catch (e: any) {
-							return Response.json(
-								rpcErr(id, -32006, `Failed to update tunnel ingress: ${e?.message || e}`),
-							);
-						}
-
-						// 4. Create DNS record
-						try {
-							// Get zone name to build FQDN
-							const zoneResp = await fetch(
-								`https://api.cloudflare.com/client/v4/zones/${env.CF_ZONE_ID}`,
-								{ headers: { Authorization: `Bearer ${env.CF_API_TOKEN}` } },
-							);
-							const zoneBody: any = await zoneResp.json();
-							const zoneName: string = zoneBody.result?.name || "void.delivery";
-							const fqdn = `${hostname}.${zoneName}`;
-							const dns = await createDnsCname(
-								env.CF_API_TOKEN,
-								env.CF_ZONE_ID,
-								fqdn,
-								tunnelId!,
-							);
-							dnsRecordId = dns.id;
-							publicUrl = `https://${fqdn}`;
-						} catch (e: any) {
-							return Response.json(
-								rpcErr(id, -32007, `Failed to create DNS record: ${e?.message || e}`),
-							);
-						}
-					}
-
-					// 5. Insert deployment row
-					const now = Math.floor(Date.now() / 1000);
-					await env.void_db
-						.prepare(
-							`INSERT INTO deployments (id, project_id, server_id, ref, status, started_at, hostname, public_url, dns_record_id, port)
-							 VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
-						)
-						.bind(
-							deploymentId,
-							projectId || null,
-							serverId,
-							ref,
-							now,
-							hostname,
-							publicUrl,
-							dnsRecordId,
-							port,
-						)
-						.run();
-
-					// 6. Send deploy command to the agent via the void-cell DO
-					const cellId = env.void_cell.idFromName(serverId);
-					const cellStub = env.void_cell.get(cellId);
-					// Pass the bearer token so this works in both
-					// (a) real production where cellStub.fetch is a
-					// direct DO call (bearer is ignored) and (b)
-					// wrangler dev local where the call may fall
-					// through to the /cell/:id/* HTTP route, which
-					// requires bearer.
-					const sendResp = await cellStub.fetch("https://cell/send-deploy", {
-						method: "POST",
-						headers: {
-							"content-type": "application/json",
-							authorization: `Bearer ${env.VOID_BEARER_TOKEN}`,
-						},
-						body: JSON.stringify({
-							deployment_id: deploymentId,
-							repo_url: urlCheck.normalized,
-							ref,
-							env: args.env || {},
-							build_command: buildCommand || null,
-							serve_command: serveCommand || null,
-							port,
-							hostname,
-							public_url: publicUrl,
-							tunnel_token: tunnelToken,
-							tunnel_id: tunnelId,
-						}),
+					if (server.status !== "active") return Response.json(rpcErr(id, -32010, "server agent is not active"));
+					const { getGithubToken, githubCloneEnv } = await import("./github-connections");
+					const token = await getGithubToken(env, repository.project_id);
+					if (!token) return Response.json(rpcErr(id, -32011, "project GitHub connection is missing"));
+					const { triggerDeploy } = await import("./webhook");
+					const result = await triggerDeploy(env, {
+						repository_id: repository.id,
+						project_id: repository.project_id,
+						server_id: server.id,
+						repo_url: repository.clone_url,
+						ref: String(args.ref || repository.default_branch),
+						build_command: repository.build_command || undefined,
+						serve_command: repository.serve_command || undefined,
+						port: repository.default_port,
+						env: args.env || {},
+						clone_env: githubCloneEnv(token),
+						hostname: args.hostname as string | undefined,
 					});
-
-					const sendResult: any = await sendResp.json();
-
-					return Response.json(
-						rpc(id, {
-							content: [
-								{
-									type: "text",
-									text: JSON.stringify(
-										{
-											deployment_id: deploymentId,
-											project_id: projectId || null,
-											project_slug: projectSlug,
-											server_id: serverId,
-											repo_url: urlCheck.normalized,
-											ref,
-											build_command: buildCommand || "(skipped)",
-											serve_command: serveCommand || "(skipped)",
-											port,
-											hostname,
-											public_url: publicUrl,
-											dns_record_id: dnsRecordId,
-											tunnel_id: tunnelId,
-											dispatched_to_agent: sendResp.ok,
-											agent_response: sendResult,
-											note: publicUrl
-												? `Public URL: ${publicUrl} (requires cloudflared running on agent)`
-												: "No public URL — set CF_API_TOKEN/CF_ACCOUNT_ID/CF_ZONE_ID to enable tunneling",
-										},
-										null,
-										2
-									),
-								},
-							],
-						})
-					);
+					return Response.json(rpc(id, { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }));
 				}
 
 				case "void_teardown": {
@@ -617,68 +361,17 @@ export async function handleMcp(c: any): Promise<Response> {
 					);
 				}
 
-				case "void_register_project": {
-					const slug = (args.slug as string).toLowerCase().replace(/[^a-z0-9-]/g, "-");
-					const projectId = `proj_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-
-					// verify server exists
-					const serverCheck = await env.void_db
-						.prepare("SELECT id FROM servers WHERE id = ?")
-						.bind(args.server_id)
-						.first();
-					if (!serverCheck) {
-						return Response.json(rpcErr(id, -32004, `Server ${args.server_id} not found`));
-					}
-
-					try {
-						await env.void_db
-							.prepare(
-								`INSERT INTO projects (id, server_id, slug, name, repo_url, default_branch, default_port, build_command, serve_command)
-								 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-							)
-							.bind(
-								projectId,
-								args.server_id,
-								slug,
-								args.name,
-								args.repo_url,
-								args.default_branch || "main",
-								(args.default_port as number) || 3000,
-								(args.build_command as string) || null,
-								(args.serve_command as string) || null,
-							)
-							.run();
-					} catch (e: any) {
-						if (String(e?.message || e).includes("UNIQUE")) {
-							return Response.json(
-								rpcErr(id, -32008, `Project with slug '${slug}' already exists for this user`),
-							);
-						}
-						throw e;
-					}
-
-					return Response.json(
-						rpc(id, {
-							content: [
-								{
-									type: "text",
-									text: JSON.stringify(
-										{
-											project_id: projectId,
-											slug,
-											name: args.name,
-											repo_url: args.repo_url,
-											server_id: args.server_id,
-											default_branch: args.default_branch || "main",
-											next_step: `Configure a GitHub webhook on ${args.repo_url}: URL=https://api.void.example.com/api/webhooks/github, content-type=application/json, secret=<your GITHUB_WEBHOOK_SECRET>, events=[push, pull_request]`,
-										},
-										null,
-										2,
-									),
-								},
-							],
-						})
-					);
+				case "void_list_projects": {
+					const projects = await env.void_db
+						.prepare(
+							`SELECT w.id, w.name, w.slug, gc.login AS github_login,
+							        (SELECT COUNT(*) FROM repositories r WHERE r.project_id = w.id) AS repositories,
+							        (SELECT COUNT(*) FROM servers s WHERE s.project_id = w.id) AS servers
+							 FROM projects w LEFT JOIN github_connections gc ON gc.project_id = w.id
+							 ORDER BY w.is_default DESC, w.created_at`,
+						)
+						.all();
+					return Response.json(rpc(id, { content: [{ type: "text", text: JSON.stringify(projects.results, null, 2) }] }));
 				}
 
 				default:
