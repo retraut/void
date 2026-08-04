@@ -24,7 +24,7 @@
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
-    "hono": "^4.12.27",
+    "hono": "^4.12.34",
     "zod": "^4.4.3"
   }
 }
