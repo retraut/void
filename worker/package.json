@@ -18,7 +18,7 @@
     "@types/node": "^22.10.0",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3",
-    "vitest": "~4.1.9",
+    "vitest": "~4.1.12",
     "wrangler": "^4.110.0"
   },
   "dependencies": {
